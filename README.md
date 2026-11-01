@@ -12,19 +12,19 @@
 
 ## 下载
 
-**[→ 下载 v7 固件](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v7)**
+**[→ 下载 v8 固件（最新）](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v8)**
 
 | 文件 | 用途 | 大小 |
 |---|---|---|
-| [`oled-face-pendant-v7-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v7/oled-face-pendant-v7-merged.bin) | **推荐**。整片 4 MB 镜像，地址 `0x0` 一次刷完 | 4.0 MB |
-| [`oled-face-pendant-v7-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v7/oled-face-pendant-v7-app.bin) | 只刷应用分区（不动 bootloader 和分区表） | 1.0 MB |
-| [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v7/oled_face_pendant.ino) | 源码，想改就下这个 | 61.7 KB |
+| [`oled-face-pendant-v8-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled-face-pendant-v8-merged.bin) | **推荐**。整片 4 MB 镜像，地址 `0x0` 一次刷完 | 4.0 MB |
+| [`oled-face-pendant-v8-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled-face-pendant-v8-app.bin) | 只刷应用分区（不动 bootloader 和分区表） | 1.0 MB |
+| [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled_face_pendant.ino) | 源码，想改就下这个 | 64.5 KB |
 
 整片刷（**新板子用这个，最省事**）：
 
 ```bash
 esptool.py --chip esp32c3 --port COM5 --baud 921600 \
-  write_flash 0x0 oled-face-pendant-v7-merged.bin
+  write_flash 0x0 oled-face-pendant-v8-merged.bin
 ```
 
 刷完**必须补一条复位**，否则屏幕一直黑着（原因见[下面](#那个让我查了一天的坑)）：
@@ -36,10 +36,17 @@ esptool.py --chip esp32c3 --port COM5 --before no-reset --after watchdog-reset c
 SHA256：
 
 ```
-0a40095c6386675df2b6d24c9c696909c4fee1daf8a7b5d65072bb149063b5f7  merged.bin
-8d750ff26667f7486f9a50e05cee98cc4a47fba79ce2f0eb7a41f168d8e96602  app.bin
-09c0aa8e64f556bb7da7216a2c2a13d6119929ee5a8f2f05e4feedd4cc045f4d  .ino
+f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
+361e06de278ad95bf3c428e58f7db9e3756f907aa65197a24d083a71582c65a9  app.bin
+1d96a83c59e4c21ca55384531ada0a751aae935907c1106eeab18ddbd1f0cef4  .ino
 ```
+
+<details>
+<summary>旧版本</summary>
+
+- [v7 — 22 个表情 + 双触摸键 + 网页控制](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v7)（矩形边框倒计时，锁标常驻）
+
+</details>
 
 ---
 
