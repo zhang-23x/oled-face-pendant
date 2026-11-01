@@ -10,6 +10,82 @@ No animation files, no sprite sheets — every face is drawn procedurally with e
 
 ---
 
+## Download
+
+**[-> Download v8 firmware (latest)](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v8)**
+
+| File | Use | Size |
+|---|---|---|
+| [`oled-face-pendant-v8-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled-face-pendant-v8-merged.bin) | **Recommended.** Full 4 MB image, flash at `0x0` | 4.0 MB |
+| [`oled-face-pendant-v8-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled-face-pendant-v8-app.bin) | App partition only (keeps bootloader and partition table) | 1.0 MB |
+| [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled_face_pendant.ino) | Source code | 64.5 KB |
+
+Flash the whole image (easiest for a new board):
+
+```bash
+esptool.py --chip esp32c3 --port COM5 --baud 921600 \
+  write_flash 0x0 oled-face-pendant-v8-merged.bin
+```
+
+**You must reset afterwards** or the screen stays black (see [the trap](#the-trap-that-cost-me-a-day)):
+
+```bash
+esptool.py --chip esp32c3 --port COM5 --before no-reset --after watchdog-reset chip-id
+```
+
+SHA256:
+
+```
+f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
+361e06de278ad95bf3c428e58f7db9e3756f907aa65197a24d083a71582c65a9  app.bin
+1d96a83c59e4c21ca55384531ada0a751aae935907c1106eeab18ddbd1f0cef4  .ino
+```
+
+<details>
+<summary>Previous versions</summary>
+
+- [v7 — 22 expressions + dual touch keys + web control](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v7) (2px border countdown, always-on lock badge)
+
+</details>
+
+---
+
+## What you need (minimum)
+
+### Four parts, none optional
+
+| # | Part | Spec | ~Price |
+|---|---|---|---|
+| 1 | **ESP32-C3 dev board** | 4 MB flash, USB-C, native USB (CDC) | $2 |
+| 2 | **0.96" OLED** | SSD1306, **4-pin I2C** (GND/VCC/SCL/SDA), 128x64 | $1.5 |
+| 3 | **TTP223 touch modules** | capacitive, digital OUT | $0.3 x2 |
+| 4 | **Jumper wires + USB cable** | 8 female-female; cable must carry data | $0.5 |
+
+**About $4-5 total.**
+
+### Board requirements
+
+- Chip must be **ESP32-C3** (not S2 / S3 / C6)
+- **4 MB flash** (the merged image is laid out for 4 MB)
+- **Native USB** with CDC, so `Serial` goes straight over USB without an adapter
+- A **RST button** on the board is strongly preferred
+
+### Don't buy the wrong OLED
+
+- **4-pin I2C**, not 7-pin SPI
+- **SSD1306** (SH1106 also runs but shifts the image 2 px)
+- **128x64** (a 128x32 panel only shows half the face)
+
+### What you can skip
+
+| Skip | Result |
+|---|---|
+| Touch modules | **Still runs.** Boots to NEUTRAL, controlled from the web page. No gestures |
+| OLED | Doesn't run |
+| Acrylic case | **Still runs.** Bare board on a desk |
+
+---
+
 ## Why this exists
 
 Most OLED "emoji" projects just cycle through a folder of bitmaps. This one treats the face as a **live rig**:
@@ -54,6 +130,36 @@ last touch
            from the top-left corner, and at 60 s the pendant wakes up and
            starts the whole cycle over
 ```
+
+### The three on-screen badges
+
+All badges show for 1.5 seconds and then vanish -- they never sit on the screen.
+
+| Where | Icon | When |
+|---|---|---|
+| top-left | closed padlock | `A+B` held -> **locked** |
+| top-left | open padlock (shackle lifted, gap above body) | `A+B` held -> **unlocked** |
+| top-left | small alarm clock | `B` double-tap -> countdown **on** |
+| top-left | alarm clock + slash | `B` double-tap -> countdown **off** |
+| bottom-right | hourglass | stays while the loop countdown runs |
+
+**Reading the hourglass** (13x11 px at `(109, 52)`):
+
+```
+  ┌───────────┐   top rail
+  │ █████████ │   upper chamber: starts full, one row drops every 15 s
+  │  ███████  │
+  │   █████   │   4 rows = 60 s
+  │     █     │
+  │     │     │   neck: one grain falls every 250 ms
+  │    ···    │   lower chamber: fills up as it drains
+  │  ·······  │
+  │···········│
+  └───────────┘   bottom rail
+```
+
+Sand only, no side walls -- 9 px of height cannot draw a glass curve, so the
+trapezoid shape carries the meaning.
 
 ### Gestures
 
