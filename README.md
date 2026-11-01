@@ -1,163 +1,164 @@
-# OLED Face Pendant
+# OLED 表情挂件
 
-An ESP32-C3 desktop companion with a 128×64 OLED screen that shows **22 hand-drawn pixel-art expressions**, reacts to touch, falls asleep when ignored, and is fully controllable from a phone browser over Wi-Fi.
+**简体中文** | [English](README.en.md)
 
-No animation files, no sprite sheets — every face is drawn procedurally with eyes, brows, and a mouth, so expressions can ease between states smoothly at ~30 fps.
+一个基于 **ESP32-C3** 的桌面小挂件，屏幕是 128×64 的 OLED，能显示 **22 个手绘像素表情**，会响应触摸，会被冷落而睡着，还能用手机浏览器连 Wi-Fi 直接控制。
 
-![22 expressions](docs/faces_grid.png)
+没有动画文件，没有精灵图 —— 所有表情都是用眼睛、眉毛、嘴巴**实时画出来**的，所以表情之间可以平滑缓动过渡，跑在约 30 fps。
 
----
-
-## Why this exists
-
-Most OLED "emoji" projects just cycle through a folder of bitmaps. This one treats the face as a **live rig**:
-
-- Eyes are capsules whose width / height / radius are interpolated every frame
-- Brows move independently with a `drop` offset and can go negative (with clamping — see [the trap](#the-trap-that-cost-me-a-day))
-- The mouth is a single bezier-ish shape whose curvature and corner lifts are driven by emotion
-- Extra states (spiral eyes, X eyes, heart eyes, tears, blush, z's, hearts) are layered on top
-
-That means **new expressions cost 4 lines of parameters, not 1 KB of bitmap.**
+![22 个表情](docs/faces_grid.png)
 
 ---
 
-## The 22 expressions
+## 为什么做这个
+
+市面上大多数 OLED 表情项目，本质上就是轮播一堆位图。这个把脸当成一套**活的骨架**：
+
+- 眼睛是胶囊形，宽、高、圆角每帧都在插值
+- 眉毛独立移动，带一个 `drop` 偏移，**可以是负数**（要裁剪，见[那个坑](#那个让我查了一天的坑)）
+- 嘴是单条贝塞尔曲线，弧度和嘴角上扬由情绪驱动
+- 螺旋眼、叉眼、爱心眼、眼泪、脸红、z、飘心，都是叠在上面的图层
+
+结果就是：**新增一个表情只花 4 行参数，不是 1 KB 位图。**
+
+---
+
+## 22 个表情
 
 | | | | | | |
 |---|---|---|---|---|---|
-| 0 NEUTRAL | 1 HAPPY | 2 SAD | 3 SURPRISED | 4 SLEEPY | 5 ANGRY |
-| 6 SLEEPING | 7 YAWN | 8 LAUGH | 9 BLINK | 10 BATTLE | 11 CRY |
-| 12 SHY | 13 THINK | 14 YUMMY | 15 MOCK | 16 MUSIC | 17 CONFIDENT |
-| 18 PANIC | 19 DIZZY | 20 LOVE | 21 SNEEZE | | |
+| 0 呆萌 | 1 开心 | 2 难过 | 3 惊讶 | 4 犯困 | 5 生气 |
+| 6 睡着 | 7 打哈欠 | 8 大笑 | 9 眨眼 | 10 战斗 | 11 大哭 |
+| 12 害羞 | 13 思考 | 14 好吃 | 15 嫌弃 | 16 听歌 | 17 自信 |
+| 18 慌张 | 19 晕 | 20 爱心 | 21 打喷嚏 | | |
 
-Individual 128×64 captures are in [`docs/faces/`](docs/faces/) — these are raw frame-buffer dumps from the real device, not renders.
+单张 128×64 图在 [`docs/faces/`](docs/faces/) —— 这些是**真机帧缓冲的原始 dump**，不是电脑渲染出来的效果图。
 
 ---
 
-## Behaviour
+## 行为
 
-### Idle timeline
+### 空闲时间轴
 
 ```
-last touch
+最后一次触摸
    │
-   ├─ +3.0 s   random face #1
-   ├─ +10.3 s  random face #2      ← all three re-rolled every round
-   ├─ +17.7 s  random face #3
-   ├─ +25.0 s  yawn (900 ms)
-   ├─ +25.9 s  drowsy  (lids half down, z's appear)
-   └─ +30.0 s  asleep  (breathing gets faster)
+   ├─ +3.0 秒   随机播第 1 个表情
+   ├─ +10.3 秒  随机播第 2 个        ← 三个表情每轮都重新抽
+   ├─ +17.7 秒  随机播第 3 个
+   ├─ +25.0 秒  打哈欠（900 毫秒）
+   ├─ +25.9 秒  犯困（眼皮半垂，z 开始出现）
+   └─ +30.0 秒  睡着（呼吸越来越快）
         │
-        └─ if loop mode is on: a 2 px border crawls around the screen edge
-           from the top-left corner, and at 60 s the pendant wakes up and
-           starts the whole cycle over
+        └─ 如果开着循环模式：2px 边框从左上角沿屏幕边缘爬行，
+           走满 60 秒就醒过来，重新开始整个循环
 ```
 
-### Gestures
+### 手势
 
-| Gesture | Awake | Drowsy / asleep |
+| 手势 | 清醒时 | 犯困 / 睡着时 |
 |---|---|---|
-| **A single tap** | shy + 3 hearts | wake → surprised → happy |
-| **A long press** | neutral + 3 hearts, then 700 ms later love + 3 hearts | ignored |
-| **A double tap** | laugh + 6 hearts floating up | ignored |
-| **B single tap** | next face in rotation | ignored |
-| **B double tap** | toggle 60 s sleep loop | ignored |
-| **B long press** | restart the OLED (re-runs `u8g2.begin()`, also rescues a stuck I²C bus) | same |
-| **A+B hold 2 s** | lock / unlock keys A and B | same |
+| **A 单击** | 害羞 + 3 颗心 | 唤醒 → 惊讶 → 开心 |
+| **A 长按** | 呆萌 + 3 颗心，700 毫秒后变成爱心 + 3 颗心 | 不打扰 |
+| **A 双击** | 大笑 + 6 颗心上飘 | 不打扰 |
+| **B 单击** | 轮播下一个表情 | 忽略 |
+| **B 双击** | 开关 60 秒循环睡眠 | 忽略 |
+| **B 长按** | 重启 OLED（重跑 `u8g2.begin()`，顺带能救卡死的 I²C 总线） | 同左 |
+| **A+B 同按 2 秒** | 锁定 / 解锁 A、B 两键 | 同左 |
 
-**What "lock" actually means:** it only disables gesture recognition on A and B, and draws a small padlock in the top-left corner. Every timer, the sleep state machine, the 60 s loop, the random face show, and the auto-rotation keep running untouched. Unlocking resumes with no state reset.
+**「锁定」到底是什么**：它只屏蔽 A、B 两键的手势识别，左上角画一个小锁。所有计时器、睡眠状态机、60 秒循环、随机表情表演、自动轮播**全部照常运行**，解锁后无缝继续。
 
-> This was originally implemented wrong — locking froze the whole state machine, so the 60 s countdown stopped advancing and the pendant slept forever. If you are porting this, do not gate your timers on the lock flag.
+> 这一条最初做错了 —— 锁定把整个状态机冻住了，导致 60 秒倒计时不再走，挂件一直睡不醒。如果你也要移植，**不要把计时器挂在锁定标志上**。
 
-### Web control
+### 网页控制
 
-- AP SSID: `FacePendant`
-- Password: `face1234`
-- URL: `http://192.168.4.1`
-- The AP shuts itself off after 60 s of no requests
+- AP 名称：`FacePendant`
+- 密码：`face1234`
+- 地址：`http://192.168.4.1`
+- 空闲 60 秒自动关闭热点
 
-The page lets you tap any of the 22 faces, see live status (current face, brightness, uptime, time since last touch, loop countdown, lock state), and toggle brightness / lock / loop.
+网页上能：点 22 个表情任意切换、看实时状态（当前表情号、亮度、上了多久、距上次触摸、循环倒计时、锁定状态、困/睡状态）、调亮度、切锁定、切循环。
 
-### Serial commands (115200)
+### 串口命令（115200）
 
-| Command | Effect |
+| 命令 | 作用 |
 |---|---|
-| `0`–`21` | switch to that face |
-| `P` | dump the current 1024-byte frame buffer as `[dump]<face>:<2048 hex chars>` |
-| `K` | toggle loop mode (same as B double tap) |
-| `R` | toggle lock (same as A+B hold) |
+| `0`–`21` | 直接切到指定表情 |
+| `P` | dump 当前 1024 字节帧缓冲，输出 `[dump]<表情号>:<2048 位十六进制>` |
+| `K` | 切换循环模式（等价 B 双击） |
+| `R` | 切换锁定（等价 A+B 长按） |
 
-The `P` command is how all the images in `docs/faces/` were produced. See [`tools/dump_preview.py`](tools/dump_preview.py).
+`docs/faces/` 里所有图都是靠 `P` 命令导出来的，脚本在 [`tools/dump_preview.py`](tools/dump_preview.py)。
 
 ---
 
-## Wiring
+## 接线
 
-| Signal | Pin | Notes |
+| 信号 | 引脚 | 说明 |
 |---|---|---|
 | OLED SCL | GPIO4 | 400 kHz |
 | OLED SDA | GPIO3 | 400 kHz |
 | OLED VCC | 3V3 | |
 | OLED GND | GND | |
-| Touch module power | GPIO7 | powers the TTP223 from an IO pin (high, ~2 mA) — saves a wire |
-| Key A out | GPIO6 | TTP223 push-pull output |
-| Key B out | GPIO10 | TTP223 push-pull output, internal pulldown |
-| A/B GND | GND | common ground required |
+| 触摸模块供电 | GPIO7 | 用一个 IO 脚给 TTP223 供电（拉高，约 2 mA），省一根线 |
+| A 键 OUT | GPIO6 | TTP223 推挽输出 |
+| B 键 OUT | GPIO10 | TTP223 推挽输出，开内部下拉 |
+| A/B GND | GND | 必须共地 |
 
-Key A's polarity is auto-detected at boot (12 samples). Key B is **always active-high**, because the internal pulldown guarantees it can only ever pull high when touched.
+A 键极性开机自动探测（读 12 次）。B 键**固定按高有效处理**，因为有内部下拉，它物理上只可能在触摸时拉高。
 
-### Boot self-check
+### 启动自检
 
 ```
 === OLED keychain face boot ===
-[touch] A idle high=0/12 -> HIGH | B fixed HIGH    ← must be 0/12 or 12/12
+[touch] A idle high=0/12 -> HIGH | B fixed HIGH    ← 必须是 0/12 或 12/12
 [touch] init A=0 B=0
-[i2c] devices: 0x3C                                 ← without this line the panel is not connected
+[i2c] devices: 0x3C                                 ← 没有这一行就是屏没接上
 [wifi] AP "FacePendant"  pass "face1234"  ->  http://192.168.4.1
 [boot] ready, touch to change face
 ```
 
-If you see instead:
+如果看到的是：
 
 ```
 [i2c] devices: none
 [touch] key A jitter (31 flips/2s) -> disabled, check 3V3 and OUT wiring
 ```
 
-then your **3V3 or GND is broken** — the panel and the touch module failing together almost always means a shared rail, not two separate loose wires.
+那就是 **3V3 或 GND 断了** —— 屏幕和触摸模块同时失效，基本都是共用电源线的问题，不是两根线各自松了。
 
 ---
 
-## The trap that cost me a day
+## 那个让我查了一天的坑
 
-`u8g2.drawLine()` takes **unsigned** coordinates. Passing a negative one does not clip it — it becomes something like `0xFFFFFFxx` and draws a line clean across the entire screen, straight through both eyes. It looked like a memory corruption bug. It was not.
+`u8g2.drawLine()` 的坐标参数是**无符号整数**。传负数不会裁剪，而是变成 `0xFFFFFFxx` 之类的东西，直接画一条贯穿整个屏幕的线，正好从两只眼睛中间穿过去。当时看起来像内存踩了，其实不是。
 
-Every drawing call in this project clamps its coordinates:
+这个项目里每一处画图都做了裁剪：
 
 ```cpp
 int x1 = clamp(cx - half, 0, 127);
 int y1 = clamp(cy - half, 0, 63);
 ```
 
-Two other landmines:
+另外两颗地雷：
 
-1. **The board will not restart after uploading.** The RTS line on this particular C3 reaches nothing. `arduino-cli upload` finishes with `Hash of data verified` and then the pendant just sits there dark. Either press RST by hand, or send a watchdog reset with esptool.
-2. **`WebServer` does not bind port 80 on core 3.3.x here.** Replaced with a hand-written `WiFiServer` writing in 512-byte chunks with an explicit `flush()`.
+1. **烧完不会自己重启。** 这块 C3 的 RTS 线是悬空的。`arduino-cli upload` 打完 `Hash of data verified` 之后挂件就黑着不动。要么手动按 RST，要么用 esptool 发一次 watchdog 复位。
+2. **`WebServer` 库在这套 core 上不监听 80 端口。** 已改成手写 `WiFiServer`，512 字节分块写 + 显式 `flush()`。
 
 ---
 
-## Build
+## 编译与烧录
 
-Tested with `esp32` core 3.3.10 and Arduino CLI.
+实测环境：`esp32` core 3.3.10 + Arduino CLI。
 
 ```bash
-# compile
+# 编译
 arduino-cli compile \
   --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc \
   --build-path ./build \
   firmware/oled_face_pendant
 
-# flash (check the port first — it moves after replugging)
+# 烧录（先确认端口，插拔后会变）
 arduino-cli board list
 arduino-cli upload \
   --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc \
@@ -166,45 +167,45 @@ arduino-cli upload \
   firmware/oled_face_pendant
 ```
 
-Resource use: **1,030,509 bytes of 1,310,720 (78 %)** program space, ~12 % RAM.
+资源占用：**程序空间 1,030,509 / 1,310,720 字节（78%）**，RAM 约 12%。
 
-Library dependencies: `U8g2` by oliver (only external library).
+外部库只有一个：`U8g2`（作者 oliver）。
 
 ---
 
-## Adding your own expression
+## 自己加一个表情
 
-1. Add the name to `enum Emotion` (before `EMO_COUNT`)
-2. Add a `case` in `setEmotion()` with eye / brow / mouth parameters
-3. Optionally add decorations in `drawDeco()`
+1. 在 `enum Emotion` 里加名字（放在 `EMO_COUNT` 前面）
+2. 在 `setEmotion()` 里加一个 `case`，填眼睛 / 眉毛 / 嘴的参数
+3. 需要额外装饰就在 `drawDeco()` 里加
 
-The eye styles are selected by `gEyeStyle`:
+眼睛样式由 `gEyeStyle` 选：
 
-| value | style |
+| 值 | 样式 |
 |---|---|
-| 0 | capsule (default) |
-| 1 | arc / crescent |
-| 2 | spiral |
-| 3 | cross (X) |
-| 4 | heart |
+| 0 | 胶囊（默认） |
+| 1 | 月牙 / 弧线 |
+| 2 | 螺旋 |
+| 3 | 叉 |
+| 4 | 爱心 |
 
-Example — the whole definition of `LOVE`:
+举个例子，「爱心」这个表情的全部定义就这么几行：
 
 ```cpp
-case LOVE:                                 // heart eyes + smile arc
+case LOVE:                                 // 爱心眼 + 笑弧
   setEyeTargets(lx, cy, 22, 22, rx, cy, 22, 22);
   setMouthTargets(mx, my + 2, 20, 4);
   setBrows(lx, 0, 12, 0, rx, 0, 12, 0, false);
-  gEyeStyle = 4;                           // switch eyes to heart-shaped
+  gEyeStyle = 4;                           // 眼睛切成心形
   break;
 ```
 
-Five lines, no bitmap, and it eases in from whatever face was showing before.
+五行，零位图，而且会从上一个表情平滑缓动过来。
 
 ---
 
-## License
+## 许可
 
-MIT — see [LICENSE](LICENSE).
+MIT —— 见 [LICENSE](LICENSE)。
 
-The expressions are hand-tuned parameters, not copied assets. If you build something with it, a link back is appreciated but not required.
+表情都是手工调出来的参数，没有抄任何素材。如果你拿去做东西，标个出处最好，不标也不追究。
