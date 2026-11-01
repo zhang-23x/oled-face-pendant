@@ -10,6 +10,86 @@
 
 ---
 
+## 下载
+
+**[→ 下载 v7 固件](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v7)**
+
+| 文件 | 用途 | 大小 |
+|---|---|---|
+| [`oled-face-pendant-v7-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v7/oled-face-pendant-v7-merged.bin) | **推荐**。整片 4 MB 镜像，地址 `0x0` 一次刷完 | 4.0 MB |
+| [`oled-face-pendant-v7-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v7/oled-face-pendant-v7-app.bin) | 只刷应用分区（不动 bootloader 和分区表） | 1.0 MB |
+| [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v7/oled_face_pendant.ino) | 源码，想改就下这个 | 61.7 KB |
+
+整片刷（**新板子用这个，最省事**）：
+
+```bash
+esptool.py --chip esp32c3 --port COM5 --baud 921600 \
+  write_flash 0x0 oled-face-pendant-v7-merged.bin
+```
+
+刷完**必须补一条复位**，否则屏幕一直黑着（原因见[下面](#那个让我查了一天的坑)）：
+
+```bash
+esptool.py --chip esp32c3 --port COM5 --before no-reset --after watchdog-reset chip-id
+```
+
+SHA256：
+
+```
+0a40095c6386675df2b6d24c9c696909c4fee1daf8a7b5d65072bb149063b5f7  merged.bin
+8d750ff26667f7486f9a50e05cee98cc4a47fba79ce2f0eb7a41f168d8e96602  app.bin
+09c0aa8e64f556bb7da7216a2c2a13d6119929ee5a8f2f05e4feedd4cc045f4d  .ino
+```
+
+---
+
+## 最少需要什么
+
+### 四样东西，缺一不可
+
+| # | 物料 | 规格 | 参考价 |
+|---|---|---|---|
+| 1 | **ESP32-C3 开发板** | 4 MB Flash，带 USB-C，USB 直连（CDC） | ¥15 |
+| 2 | **0.96 寸 OLED** | SSD1306，**I²C 四针**（GND / VCC / SCL / SDA），128×64 | ¥10 |
+| 3 | **TTP223 触摸模块** | 电容式，OUT 输出高低电平 | ¥2 × 2 |
+| 4 | **杜邦线 + USB 数据线** | 母对母 8 根；USB 线必须能传数据 | ¥3 |
+
+**合计约 ¥30–35。**
+
+### 板子长什么样
+
+不是所有 C3 板都能用。需要满足：
+
+- 芯片是 **ESP32-C3**（不是 S2 / S3 / C6）
+- Flash **4 MB**（`merged.bin` 是按 4 MB 布局打的）
+- 有 **USB-C 或 Micro-USB 直连**，且支持 CDC（这样 `Serial` 直接走 USB，不用外接串口模块）
+- 板上最好有 **RST 键**（没有的话每次烧完得拔插 USB）
+
+我用的这种：`GND VCC SCK SDA` 丝印、双排针、带 RST + BOOT 两个小按键的 C3 小板。
+
+### OLED 别买错
+
+- **要 I²C 四针的**，不是 SPI 七针的
+- 驱动芯片 **SSD1306**（SH1106 也能跑，但画面会左右偏 2 像素）
+- 分辨率 **128×64**（128×32 的屏只能显示半张脸）
+
+### 能省的和不能省的
+
+| 想省掉 | 后果 |
+|---|---|
+| 省掉触摸模块 | **能跑**。上电就是呆萌脸，靠 Wi-Fi 网页控制。手势全没了 |
+| 省掉 OLED | 跑不了。没有屏幕这个项目就没意义 |
+| 用 3.3V 电源替代 GPIO7 供电 | **能跑**，但要多拉一根线。现在是用一个 IO 脚给触摸模块供电，省线 |
+| 省掉外壳 | **能跑**。裸板放桌上一样用，就是有点丑 |
+
+### 不必须但推荐
+
+- **亚克力外壳**：我用的 3 层夹板结构，淘宝搜「OLED 亚克力外壳 0.96」，¥8–15
+- **锂电池 + TP4056 充电板**：想脱线用就加，¥10 左右
+- **M2 螺丝套装**：装外壳用
+
+---
+
 ## 为什么做这个
 
 市面上大多数 OLED 表情项目，本质上就是轮播一堆位图。这个把脸当成一套**活的骨架**：
