@@ -1,0 +1,21 @@
+# Arduino / build artifacts
+build/
+*.elf
+*.map
+*.lst
+
+# Firmware images — users should build from source
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
