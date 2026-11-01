@@ -77,6 +77,9 @@ TouchKey keys[2] = {
 
 bool          gLocked      = false;  // A+B 长按 2s 锁定
 bool          gLockFired   = false;  // 本次组合已触发
+unsigned long gLockBadgeUntil = 0;   // 锁标显示到什么时候（切换后 1.5 秒）
+unsigned long gClockBadgeUntil = 0;  // 闹钟标显示到什么时候（双击 B 后 1.5 秒）
+bool          gClockBadgeOn   = true; // 这次提示是「开」还是「关」
 bool          gComboActive = false;
 unsigned long gComboAt     = 0;
 bool          gLoopSleep   = false;  // B 双击：犯困/睡着后 1 分钟自动醒来重来
@@ -787,6 +790,8 @@ void onB_Double(unsigned long now, bool wasSleepy) {
   // B 双击 = 只增加/取消一个 60 秒自动重启计时器，不锁任何其它按键
   gLastTouch = now; lastActionTime = now;
   gLoopSleep = !gLoopSleep;
+  gClockBadgeOn = gLoopSleep;            // 左上角提示：开=闹钟，关=闹钟带斜杠
+  gClockBadgeUntil = now + 1500;
   if (!gLoopSleep) {
     gLoopStart = 0;
     Serial.println("[B] double -> countdown OFF");
@@ -858,6 +863,7 @@ void touchLogic(unsigned long now) {
   if (gComboActive && !gLockFired && (now - gComboAt) >= 2000) {
     gLockFired = true;
     gLocked = !gLocked;
+    gLockBadgeUntil = now + 1500;      // 左上角闪个小锁，1.5 秒后消失
     // 只锁 A/B 两键的误触，不碰任何计时器和表情状态
     Serial.printf("[lock] %s\n", gLocked ? "ON" : "OFF");
   }
@@ -1115,8 +1121,9 @@ void loop() {
     drawDeco();
     drawZees(now);
     drawHearts(now);
-    drawCountdownRing(now);
-    drawLockBadge();
+    drawHourglass(now);
+    drawLockBadge(now);
+    drawClockBadge(now);
     if (gDumpReq) {
       gDumpReq = false;
       const uint8_t* bp = u8g2.getBufferPtr();
@@ -1185,6 +1192,7 @@ void execCmd(const char* cmd, unsigned long now) {
 
     case 'R':                               // 远程切换锁定（等价 A+B 长按 2 秒）
       gLocked = !gLocked;
+      gLockBadgeUntil = now + 1500;
       Serial.printf("[lock] %s (remote)\n", gLocked ? "ON" : "OFF");
       break;
 
@@ -1219,6 +1227,8 @@ void execCmd(const char* cmd, unsigned long now) {
     case 'K':                               // 切换「1 分钟循环」（等价 B 双击，但不受锁死影响）
       gLoopSleep = !gLoopSleep;
       gLoopStart = 0;
+      gClockBadgeOn = gLoopSleep;
+      gClockBadgeUntil = now + 1500;
       Serial.printf("[cmd] loopSleep %s\n", gLoopSleep ? "ON" : "OFF");
       break;
 
@@ -1330,40 +1340,61 @@ void burstHeartsUp(unsigned long now) {
 }
 
 // -----------------------------------------------------------------
-//  1 分钟循环的圆环倒计时（只在犯困/睡着 + 循环开启时画）
-//  右下角，半径 11，60 格刻度：走过的点亮实心，剩下的留空心点
+//  1 分钟循环的沙漏倒计时（只在犯困/睡着 + 循环开启时画）
+//
+//  右下角 9x11：顶框 / 上腔 4 行 / 颈 1 行 / 下腔 4 行 / 底框
+//  上腔每 15 秒掉一行沙，沙整体下沉（顶部先空）
+//  颈口每 250ms 一格往下滴，落到沙堆就停
 // -----------------------------------------------------------------
-void drawCountdownRing(unsigned long now) {
+void drawHourglass(unsigned long now) {
   if (!gLoopSleep || !gLoopStart || !(gDrowsy || gAsleep)) return;
 
   long left = (long)LOOP_SLEEP_MS - (long)(now - gLoopStart);
   if (left < 0) left = 0;
-  float frac = (float)left / (float)LOOP_SLEEP_MS;   // 1.0 → 0.0
+  long elapsed = (long)LOOP_SLEEP_MS - left;
 
-  // 沿 128x64 屏幕四周走一圈，2px 粗，左上角起顺时针，线性变短
-  const int PERIM = 376;                              // 128 + 62 + 126 + 60
-  int lit = (int)(frac * PERIM + 0.5f);
-  int i = 0;
+  const int X0 = 109, Y0 = 52;        // 左上角（宽 13，右边界 121）
+  const int W  = 13;
 
-  // ① 顶边 y=0/1，x 0→127
-  for (int x = 0; x < 128 && i < lit; x++, i++) {
-    u8g2.drawPixel(x, 0);
-    u8g2.drawPixel(x, 1);
+  // 顶框 / 底框
+  for (int x = 0; x < W; x++) {
+    u8g2.drawPixel(X0 + x, Y0);
+    u8g2.drawPixel(X0 + x, Y0 + 10);
   }
-  // ② 右边 x=126/127，y 2→63
-  for (int y = 2; y < 64 && i < lit; y++, i++) {
-    u8g2.drawPixel(126, y);
-    u8g2.drawPixel(127, y);
+
+  // 上腔还剩几行沙：60 秒 4 档，每 15 秒掉 1 行
+  int keep = 4 - (int)(elapsed / 15000);
+  if (keep < 0) keep = 0;
+  if (keep > 4) keep = 4;
+
+  // 上腔 4 行（y+1..y+4），梯形宽度 11/9/6/3
+  static const uint8_t upW[4] = {11, 9, 6, 3};
+  for (int r = 0; r < 4; r++) {
+    if (r < 4 - keep) continue;                       // 顶部先空
+    int w = upW[r];
+    int sx = X0 + 6 - w / 2;
+    for (int k = 0; k < w; k++) u8g2.drawPixel(sx + k, Y0 + 1 + r);
   }
-  // ③ 底边 y=62/63，x 125→0
-  for (int x = 125; x >= 0 && i < lit; x--, i++) {
-    u8g2.drawPixel(x, 62);
-    u8g2.drawPixel(x, 63);
+
+  // 颈
+  u8g2.drawPixel(X0 + 6, Y0 + 5);
+
+  // 下腔 4 行（y+6..y+9），梯形宽度 3/6/9/11，从底部往上堆
+  static const uint8_t dnW[4] = {3, 6, 9, 11};
+  for (int r = 0; r < 4; r++) {
+    if (r < keep) continue;                           // 沙不够，顶部空着
+    int w = dnW[r];
+    int sx = X0 + 6 - w / 2;
+    for (int k = 0; k < w; k++) u8g2.drawPixel(sx + k, Y0 + 6 + r);
   }
-  // ④ 左边 x=0/1，y 61→2
-  for (int y = 61; y >= 2 && i < lit; y--, i++) {
-    u8g2.drawPixel(0, y);
-    u8g2.drawPixel(1, y);
+
+  // 颈口滴落：每 250ms 走一格，落到沙堆顶部就消失
+  int lowerTop = Y0 + 6 + keep;
+  int p = (int)((now / 250) % 4);
+  for (int k = 0; k < 4; k++) {
+    int yy = Y0 + 6 + k;
+    if (yy >= lowerTop) break;
+    if (k == p) { u8g2.drawPixel(X0 + 6, yy); break; }
   }
 }
 
@@ -1439,20 +1470,50 @@ void drawHeartShape(int cx, int cy) {
   u8g2.setDrawColor(1);
 }
 
-// 锁定时左上角一个小锁标记：只做视觉提示，不影响表情本身
-void drawLockBadge() {
-  if (!gLocked) return;
+// 锁定状态切换后，左上角显示 1.5 秒的小标记：
+//   锁上 → 梁和体连着；解锁 → 梁抬起右移，和体之间留一道缝。平时不占屏幕。
+void drawLockBadge(unsigned long now) {
+  if (!gLockBadgeUntil || now >= gLockBadgeUntil) return;
   const int x = 2, y = 3;
-  u8g2.drawPixel(x + 1, y);      // 锁梁
-  u8g2.drawPixel(x + 4, y);
-  u8g2.drawPixel(x,     y + 1);
-  u8g2.drawPixel(x + 5, y + 1);
-  u8g2.drawPixel(x,     y + 2);
-  u8g2.drawPixel(x + 5, y + 2);
-  u8g2.drawBox(x, y + 3, 6, 4);  // 锁体
-  u8g2.setDrawColor(0);
-  u8g2.drawPixel(x + 2, y + 5);  // 锁孔
-  u8g2.setDrawColor(1);
+
+  if (gLocked) {
+    // 闭合：拱形梁压在锁体正上方
+    u8g2.drawPixel(x + 1, y);      u8g2.drawPixel(x + 2, y);
+    u8g2.drawPixel(x + 3, y);      u8g2.drawPixel(x + 4, y);
+    u8g2.drawPixel(x,     y + 1);  u8g2.drawPixel(x + 5, y + 1);
+    u8g2.drawPixel(x,     y + 2);  u8g2.drawPixel(x + 5, y + 2);
+    u8g2.drawBox(x, y + 3, 6, 4);                 // 锁体
+    u8g2.setDrawColor(0);
+    u8g2.drawPixel(x + 2, y + 5);                 // 锁孔
+    u8g2.setDrawColor(1);
+  } else {
+    // 打开：梁抬起并右移，锁体下移一行，中间露出缝
+    u8g2.drawPixel(x + 2, y);      u8g2.drawPixel(x + 3, y);
+    u8g2.drawPixel(x + 4, y);      u8g2.drawPixel(x + 5, y);
+    u8g2.drawPixel(x + 1, y + 1);  u8g2.drawPixel(x + 6, y + 1);
+    u8g2.drawPixel(x + 1, y + 2);  u8g2.drawPixel(x + 6, y + 2);
+    u8g2.drawBox(x, y + 4, 6, 3);                 // 锁体（矮一行，位置下移）
+    u8g2.setDrawColor(0);
+    u8g2.drawPixel(x + 2, y + 5);
+    u8g2.setDrawColor(1);
+  }
+}
+
+// 双击 B 切换倒计时后，左上角显示 1.5 秒的小闹钟：
+//   开 → 只画闹钟；关 → 闹钟上压一道斜杠。平时不占屏幕。
+void drawClockBadge(unsigned long now) {
+  if (!gClockBadgeUntil || now >= gClockBadgeUntil) return;
+  const int cx = 6, cy = 7, r = 4;
+
+  u8g2.drawCircle(cx, cy, r);          // 表盘
+  u8g2.drawPixel(cx - 3, cy - 4);      // 左铃（圆外两侧）
+  u8g2.drawPixel(cx + 3, cy - 4);      // 右铃
+  u8g2.drawPixel(cx, cy - 2);          // 分针（指向 12）
+  u8g2.drawPixel(cx, cy - 1);
+  u8g2.drawPixel(cx + 1, cy);          // 时针（指向 3）
+  u8g2.drawPixel(cx + 2, cy);
+
+  if (!gClockBadgeOn) u8g2.drawLine(2, 2, 11, 12);   // 关掉：一道斜杠
 }
 
 // 各表情的挂件装饰：只在对应情绪下画
