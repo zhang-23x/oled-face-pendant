@@ -12,19 +12,19 @@ No animation files, no sprite sheets — every face is drawn procedurally with e
 
 ## Download
 
-**[-> Download v8 firmware (latest)](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v8)**
+**[-> Download v9 firmware (latest)](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v9)**
 
 | File | Use | Size |
 |---|---|---|
-| [`oled-face-pendant-v8-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled-face-pendant-v8-merged.bin) | **Recommended.** Full 4 MB image, flash at `0x0` | 4.0 MB |
-| [`oled-face-pendant-v8-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled-face-pendant-v8-app.bin) | App partition only (keeps bootloader and partition table) | 1.0 MB |
-| [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled_face_pendant.ino) | Source code | 64.5 KB |
+| [`oled-face-pendant-v9-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-merged.bin) | **Recommended.** Full 4 MB image, flash at `0x0` | 4.0 MB |
+| [`oled-face-pendant-v9-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-app.bin) | App partition only (keeps bootloader and partition table) | 1.0 MB |
+| [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled_face_pendant.ino) | Source code | 65.8 KB |
 
 Flash the whole image (easiest for a new board):
 
 ```bash
 esptool.py --chip esp32c3 --port COM5 --baud 921600 \
-  write_flash 0x0 oled-face-pendant-v8-merged.bin
+  write_flash 0x0 oled-face-pendant-v9-merged.bin
 ```
 
 **You must reset afterwards** or the screen stays black (see [the trap](#the-trap-that-cost-me-a-day)):
@@ -36,9 +36,9 @@ esptool.py --chip esp32c3 --port COM5 --before no-reset --after watchdog-reset c
 SHA256:
 
 ```
-f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
-361e06de278ad95bf3c428e58f7db9e3756f907aa65197a24d083a71582c65a9  app.bin
-1d96a83c59e4c21ca55384531ada0a751aae935907c1106eeab18ddbd1f0cef4  .ino
+821ae7dd8431f19b1113bb208716587f8926b31d4f0f1ff5efcf65dc9e7b8b22  merged.bin
+099d50b949d9e3fa563c03a095362ea7c69381f6cbf996c83a7a1e09de3236df  app.bin
+bcee8860ce9250433795d84c95fa088e6b265c8fa9fcd1c0b3f3fec2fe9c9c81  .ino
 ```
 ---
 
@@ -111,17 +111,30 @@ Individual 128×64 captures are in [`docs/faces/`](docs/faces/) — these are ra
 ```
 last touch
    │
-   ├─ +3.0 s   random face #1
-   ├─ +10.3 s  random face #2      ← all three re-rolled every round
-   ├─ +17.7 s  random face #3
-   ├─ +25.0 s  yawn (900 ms)
-   ├─ +25.9 s  drowsy  (lids half down, z's appear)
-   └─ +30.0 s  asleep  (breathing gets faster)
-        │
-        └─ if loop mode is on: a 2 px border crawls around the screen edge
-           from the top-left corner, and at 60 s the pendant wakes up and
-           starts the whole cycle over
+   ├─ +3.0 s   first random face starts
+   │            one new face every 7.33 s, drawn from the 18-face rotation,
+   │            no repeats within a round
+   │
+   ├─ round ends (3 / 6 / 9 faces, three equally likely buckets at 33.3% each)
+   │
+   ├─ yawn (900 ms)
+   ├─ +0.9 s   drowsy  (lids half down, z's appear)
+   ├─ +5.9 s   asleep  (breathing gets faster)
+   │
+   └─ if loop mode is on: an hourglass appears in the top-left corner,
+      counted from the yawn; at 60 s the pendant wakes up and restarts
 ```
+
+How many faces a round gets is `esp_random() % 3`:
+
+| Bucket | Chance | Show lasts | Yawn at |
+|---|---|---|---|
+| 3 faces | 33.3% | 25 s | 25 s |
+| 6 faces | 33.3% | 47 s | 47 s |
+| 9 faces | 33.3% | 69 s | 69 s |
+
+So how long it takes to get sleepy varies per round, but the
+"yawn -> 5 s of half-closed eyes -> asleep" beat is always the same.
 
 ### The three on-screen badges
 
@@ -133,9 +146,14 @@ All badges show for 1.5 seconds and then vanish -- they never sit on the screen.
 | top-left | open padlock (shackle lifted, gap above body) | `A+B` held -> **unlocked** |
 | top-left | small alarm clock | `B` double-tap -> countdown **on** |
 | top-left | alarm clock + slash | `B` double-tap -> countdown **off** |
-| bottom-right | hourglass | stays while the loop countdown runs |
+| top-left | hourglass | stays while the loop countdown runs |
 
-**Reading the hourglass** (13x11 px at `(109, 52)`):
+The padlock and the alarm clock take priority: during the 1.5 s they are on
+screen the hourglass is not drawn at all, and it comes back unchanged
+afterwards.
+
+**Reading the hourglass** (13x11 px + a 1 px frame at `(1, 1)`, occupying
+`(0,0)`-`(14,12)`):
 
 ```
   ┌───────────┐   top rail
@@ -150,8 +168,9 @@ All badges show for 1.5 seconds and then vanish -- they never sit on the screen.
   └───────────┘   bottom rail
 ```
 
-Sand only, no side walls -- 9 px of height cannot draw a glass curve, so the
-trapezoid shape carries the meaning.
+Sand only, no side walls -- 11 px of height cannot draw a glass curve, so the
+trapezoid shape carries the meaning. Both the frame and the sand keep a 1 px
+margin, so it can hug the top-left corner without being clipped.
 
 ### Gestures
 

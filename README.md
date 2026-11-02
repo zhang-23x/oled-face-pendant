@@ -12,19 +12,19 @@
 
 ## 下载
 
-**[→ 下载 v8 固件（最新）](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v8)**
+**[→ 下载 v9 固件（最新）](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v9)**
 
 | 文件 | 用途 | 大小 |
 |---|---|---|
-| [`oled-face-pendant-v8-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled-face-pendant-v8-merged.bin) | **推荐**。整片 4 MB 镜像，地址 `0x0` 一次刷完 | 4.0 MB |
-| [`oled-face-pendant-v8-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled-face-pendant-v8-app.bin) | 只刷应用分区（不动 bootloader 和分区表） | 1.0 MB |
-| [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v8/oled_face_pendant.ino) | 源码，想改就下这个 | 64.5 KB |
+| [`oled-face-pendant-v9-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-merged.bin) | **推荐**。整片 4 MB 镜像，地址 `0x0` 一次刷完 | 4.0 MB |
+| [`oled-face-pendant-v9-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-app.bin) | 只刷应用分区（不动 bootloader 和分区表） | 1.0 MB |
+| [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled_face_pendant.ino) | 源码，想改就下这个 | 65.8 KB |
 
 整片刷（**新板子用这个，最省事**）：
 
 ```bash
 esptool.py --chip esp32c3 --port COM5 --baud 921600 \
-  write_flash 0x0 oled-face-pendant-v8-merged.bin
+  write_flash 0x0 oled-face-pendant-v9-merged.bin
 ```
 
 刷完**必须补一条复位**，否则屏幕一直黑着（原因见[下面](#那个让我查了一天的坑)）：
@@ -36,9 +36,9 @@ esptool.py --chip esp32c3 --port COM5 --before no-reset --after watchdog-reset c
 SHA256：
 
 ```
-f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
-361e06de278ad95bf3c428e58f7db9e3756f907aa65197a24d083a71582c65a9  app.bin
-1d96a83c59e4c21ca55384531ada0a751aae935907c1106eeab18ddbd1f0cef4  .ino
+821ae7dd8431f19b1113bb208716587f8926b31d4f0f1ff5efcf65dc9e7b8b22  merged.bin
+099d50b949d9e3fa563c03a095362ea7c69381f6cbf996c83a7a1e09de3236df  app.bin
+bcee8860ce9250433795d84c95fa088e6b265c8fa9fcd1c0b3f3fec2fe9c9c81  .ino
 ```
 ---
 
@@ -122,16 +122,28 @@ f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
 ```
 最后一次触摸
    │
-   ├─ +3.0 秒   随机播第 1 个表情
-   ├─ +10.3 秒  随机播第 2 个        ← 三个表情每轮都重新抽
-   ├─ +17.7 秒  随机播第 3 个
-   ├─ +25.0 秒  打哈欠（900 毫秒）
-   ├─ +25.9 秒  犯困（眼皮半垂，z 开始出现）
-   └─ +30.0 秒  睡着（呼吸越来越快）
-        │
-        └─ 如果开着循环模式：右下角出现沙漏，
-           走满 60 秒就醒过来，重新开始整个循环
+   ├─ +3.0 秒   开播第 1 个随机表情
+   │            每 7.33 秒换一个，从 18 个轮播表情里抽，一轮不重复
+   │
+   ├─ 一轮播完（3 / 6 / 9 个，三档等概率各 33.3%）
+   │
+   ├─ 打哈欠（900 毫秒）
+   ├─ +0.9 秒   犯困（眼皮半垂，z 开始出现）
+   ├─ +5.9 秒   睡着（呼吸越来越快）
+   │
+   └─ 如果开着循环模式：左上角出现沙漏，
+      从打哈欠那一刻起算 60 秒就醒过来，重新开始整个循环
 ```
+
+一轮抽几个是 `esp_random() % 3` 决定的：
+
+| 档位 | 概率 | 表演时长 | 打哈欠时刻 |
+|---|---|---|---|
+| 3 个 | 33.3% | 25 秒 | 25 秒 |
+| 6 个 | 33.3% | 47 秒 | 47 秒 |
+| 9 个 | 33.3% | 69 秒 | 69 秒 |
+
+所以「多久才犯困」每轮都不一样，但「哈欠 → 眯 5 秒 → 睡着」这段节奏是固定的。
 
 ### 屏幕上的三个小提示
 
@@ -143,9 +155,11 @@ f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
 | **左上角** | 🔓 开口的锁（梁抬起、和锁体分家） | `A+B` 长按 → **解锁** |
 | **左上角** | ⏰ 小闹钟 | `B` 双击 → **开启**循环倒计时 |
 | **左上角** | ⏰ + 斜杠 | `B` 双击 → **关闭**循环倒计时 |
-| **右下角** | 沙漏 | 循环倒计时运行期间**常驻** |
+| **左上角** | 沙漏 | 循环倒计时运行期间**常驻** |
 
-**沙漏怎么读**（13×11 像素，右下角 `(109, 52)`）：
+锁标和闹钟标有**优先权**：它们显示的那 1.5 秒里，沙漏完全不画；等它们消失，沙漏原样回来。
+
+**沙漏怎么读**（13×11 像素 + 1px 外框，左上角 `(1, 1)`，占 `(0,0)–(14,12)`）：
 
 ```
   ┌───────────┐   顶框
@@ -160,7 +174,7 @@ f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
   └───────────┘   底框
 ```
 
-只画沙、不画侧壁——9 像素高画不出玻璃曲线，靠梯形本身表达形状。
+只画沙、不画侧壁——11 像素高画不出玻璃曲线，靠梯形本身表达形状。框和沙都留了 1px 外沿，紧贴屏幕左上角也不会被裁。
 
 ### 手势
 
@@ -183,7 +197,7 @@ f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
 - AP 名称：`FacePendant`
 - 密码：`face1234`
 - 地址：`http://192.168.4.1`
-- 空闲 60 秒自动关闭热点
+- 热点默认常开（`WIFI_ALWAYS_ON 1`）；改成 0 就是空闲 60 秒自动关闭省电
 
 网页上能：点 22 个表情任意切换、看实时状态（当前表情号、亮度、上了多久、距上次触摸、循环倒计时、锁定状态、困/睡状态）、调亮度、切锁定、切循环。
 
@@ -191,7 +205,7 @@ f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
 
 | 命令 | 作用 |
 |---|---|
-| `0`–`21` | 直接切到指定表情 |
+| `F0`–`F21` | 直接切到指定表情 |
 | `P` | dump 当前 1024 字节帧缓冲，输出 `[dump]<表情号>:<2048 位十六进制>` |
 | `K` | 切换循环模式（等价 B 双击） |
 | `R` | 切换锁定（等价 A+B 长按） |

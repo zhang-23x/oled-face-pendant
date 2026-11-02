@@ -86,15 +86,19 @@ bool          gLoopSleep   = false;  // B 双击：犯困/睡着后 1 分钟自�
 unsigned long gLoopStart   = 0;      // 本轮 60 秒倒计时的起点（0 = 没在计时）
 const unsigned long LOOP_SLEEP_MS = 60000;   // 圈走完 → 醒来
 unsigned long gWakeHappyAt = 0;      // 醒来后 SURPRISED -> HAPPY 的时刻
+unsigned long gSleepAt     = 0;      // 打哈欠结束后再过 5 秒才真正睡着
 uint8_t       gBright      = 200;    // 当前对比度（跟 setContrast 同步，网页要读）
 
 // ---------------- 空闲随机表演 ----------------
 // 最后一次触摸后，先从 18 个轮播表情里随机抽 3 个依次播放；
-// 播完且期间没人碰，才继续走「打哈欠 → 犯困 → 睡着」。
+// 播完再加 50% 概率抽 3 个（与前一组不重复），若触发则再加 50% 概率抽第三组，
+// 所以一轮可能是 3 / 6 / 9 个。全部播完且期间没人碰，才走「打哈欠 → 犯困 → 睡着」。
 const unsigned long IDLE_FIRST_MS = 3000;   // 触摸后多久开始播第一个
 const unsigned long IDLE_FACE_MS  = 7333;   // 每个表情停留多久（3 + 7.33×3 ≈ 25s）
-uint8_t       gIdlePick[3]  = {0, 0, 0};    // 本轮抽中的三个轮播下标
-uint8_t       gIdleShowIdx  = 3;            // 已播到第几个（3 = 本轮播完）
+const uint8_t     IDLE_MAX       = 9;       // 一轮最多 3 组
+uint8_t       gIdlePick[IDLE_MAX] = {0};    // 本轮抽中的轮播下标
+uint8_t       gIdleTotal   = 3;             // 本轮实际要播几个（3 / 6 / 9）
+uint8_t       gIdleShowIdx = 255;           // 已播到第几个（255 = 尚未开演）
 unsigned long gIdleShowAt   = 0;            // 下一个切换时刻
 unsigned long gIdleSeenTouch = 1;           // 上次看到的 gLastTouch（用于检测"有人碰过"）
 bool          gIdleInit     = false;
@@ -120,7 +124,8 @@ const unsigned long DOUBLE_TAP_MS = 300;     // 松手后多久内再按算双�
 const unsigned long YAWN_MS       = 900;     // 打哈欠过渡时长
 const unsigned long HIC_MS        = 50;      // 打嗝（约 3 帧）
 const unsigned long DROWSY_MS   = 25000;    // 25s 无人理 → 犯困
-const unsigned long SLEEP_MS    = 30000;    // 30s 无人理 → 睡着
+// 睡着时刻不在这里定：由 gSleepAt = 打哈欠时刻 + YAWN_MS + 5000 决定
+// （抽到 6/9 个随机表演时整段会拉长到 47/69 秒，但「哈欠 → 眯 5 秒 → 睡着」的节奏不变）
 
 bool isBlinking = false;
 
@@ -133,9 +138,6 @@ bool gTouchActiveHigh = true;
 // 让新表情 2~3 帧（约 70~100ms）就落位
 float gEase = EASING;
 unsigned long gBoostUntil = 0;
-
-// "惊讶一下再回呆萌"的窗口：触摸后先 SURPRISED，到这个时刻回 NEUTRAL
-unsigned long gPopUntil = 0;
 
 // 手势状态机（单键时代的 gTouchDown/gPressStart/gLongFired/gTapReleaseAt
 // 已由文件顶部的 keys[] 取代）
@@ -713,6 +715,7 @@ void wakeUpByTouch(unsigned long now) {
   gLastTouch     = now;
   lastActionTime = now;
   gYawnUntil     = 0;
+  gSleepAt       = 0;                    // 取消待定的「哈欠后 5 秒睡着」
   gAsleep        = false;
   gDrowsy        = false;
   gSleepStart    = 0;
@@ -826,24 +829,32 @@ void onB_Long(unsigned long now) {
 }
 
 // ---------------- 空闲随机表演 ----------------
-// 从 18 个轮播表情里抽 3 个不重复的；每轮重新洗牌，所以每次都不一样
+// 从 18 个轮播表情里抽互不重复的下标，填到 gIdlePick[idx]
+void pickOneIdleFace(int idx) {
+  bool dup;
+  uint8_t pick;
+  do {
+    pick = (uint8_t)(esp_random() % (uint32_t)CYCLE_N);
+    dup = false;
+    for (int j = 0; j < idx; j++) {
+      if (gIdlePick[j] == pick) { dup = true; break; }
+    }
+  } while (dup);
+  gIdlePick[idx] = pick;
+}
+
+// 抽本轮表演：3 / 6 / 9 三个档位等概率（各约 33.3%）
 void pickIdleFaces() {
-  for (int i = 0; i < 3; i++) {
-    bool dup;
-    uint8_t pick;
-    do {
-      pick = (uint8_t)(esp_random() % (uint32_t)CYCLE_N);
-      dup = false;
-      for (int j = 0; j < i; j++) {
-        if (gIdlePick[j] == pick) { dup = true; break; }
-      }
-    } while (dup);
-    gIdlePick[i] = pick;
+  uint32_t dice = esp_random() % 3;         // 0=3 个，1=6 个，2=9 个
+  gIdleTotal = (uint8_t)(3 * (dice + 1));
+
+  for (int i = 0; i < gIdleTotal; i++) pickOneIdleFace(i);
+
+  Serial.printf("[idle] shuffle -> %d 个:", (int)gIdleTotal);
+  for (int i = 0; i < gIdleTotal; i++) {
+    Serial.printf(" pos%d=face%d", (int)gIdlePick[i], (int)CYCLE[gIdlePick[i]]);
   }
-  Serial.printf("[idle] shuffle -> pos %d=face%d / pos %d=face%d / pos %d=face%d\n",
-                (int)gIdlePick[0], (int)CYCLE[gIdlePick[0]],
-                (int)gIdlePick[1], (int)CYCLE[gIdlePick[1]],
-                (int)gIdlePick[2], (int)CYCLE[gIdlePick[2]]);
+  Serial.println();
 }
 
 // ---------------- 主状态机 ----------------
@@ -966,23 +977,26 @@ void loop() {
     gIdleInit = true;
     gIdleSeenTouch = gLastTouch;         // 有人碰过 → 本轮作废，重新洗牌
     gIdleShowIdx = 0;
+    gSleepAt = 0;                        // 作废待定的睡着时刻
     pickIdleFaces();
     gIdleShowAt = now + IDLE_FIRST_MS;
   }
-  if (!gDrowsy && !gAsleep && gIdleShowIdx < 3 && now >= gIdleShowAt) {
+  if (!gDrowsy && !gAsleep && gIdleShowIdx < gIdleTotal && now >= gIdleShowAt) {
     Emotion e = CYCLE[gIdlePick[gIdleShowIdx]];
     setEmotion(e);
     gBoostUntil = now + 200;             // 切换时快一点到位
-    Serial.printf("[idle] show %d/3 -> face %d\n", (int)gIdleShowIdx + 1, (int)e);
+    Serial.printf("[idle] show %d/%d -> face %d\n",
+                  (int)gIdleShowIdx + 1, (int)gIdleTotal, (int)e);
     gIdleShowIdx++;
     gIdleShowAt = now + IDLE_FACE_MS;
   }
 
   // ---------- 2. 无人理会的计时（困之前先打个哈欠） ----------
-  // 只有三个随机表情都播完了，才允许进入打哈欠
-  if (!gDrowsy && !gAsleep && gIdleShowIdx >= 3 && (long)(now - gLastTouch) > (long)DROWSY_MS) {
+  // 只有本轮随机表情全部播完了，才允许进入打哈欠
+  if (!gDrowsy && !gAsleep && gIdleShowIdx >= gIdleTotal && (long)(now - gLastTouch) > (long)DROWSY_MS) {
     gDrowsy = true;
     gYawnUntil = now + YAWN_MS;          // 哈欠 0.9s，之后才落成眯缝
+    gSleepAt   = now + YAWN_MS + 5000;   // 哈欠结束后再眯 5 秒才真正睡着
     setEmotion(YAWN);
     if (gLoopSleep) gLoopStart = now;    // 1 分钟循环：从"开始犯困"这一刻起算
     Serial.printf("[idle] yawn diff=%lu loop=%d\n", now - gLastTouch, (int)gLoopSleep);
@@ -993,9 +1007,12 @@ void loop() {
     gNextZeeAt = now;                    // 犯困立刻冒第一个 z
     Serial.println("[idle] drowsy");
   }
-  if (!gAsleep && (long)(now - gLastTouch) > (long)SLEEP_MS) {
-    gDrowsy = true;
-    gAsleep = true;
+  // 睡着时刻由 gSleepAt 决定：抽到 6/9 个时整段会拉长到 47/69 秒，
+  // 但「哈欠 → 眯 5 秒 → 睡着」这段节奏保持不变
+  if (!gAsleep && gSleepAt && now >= gSleepAt) {
+    gSleepAt   = 0;
+    gDrowsy    = true;
+    gAsleep    = true;
     gSleepStart = now;
     setEmotion(SLEEPING);
     Serial.printf("[idle] asleep diff=%lu\n", now - gLastTouch);
@@ -1005,6 +1022,7 @@ void loop() {
   if (gLoopSleep && gLoopStart && (now - gLoopStart >= LOOP_SLEEP_MS)) {
     Serial.println("[loop] 60s up -> wake & restart");
     gLoopStart  = 0;
+    gSleepAt    = 0;
     gAsleep     = false;
     gDrowsy     = false;
     gSleepStart = 0;
@@ -1149,6 +1167,7 @@ void loop() {
 void remoteWake(unsigned long now) {
   gLastTouch  = now;
   gYawnUntil  = 0;
+  gSleepAt    = 0;
   gAsleep     = false;
   gDrowsy     = false;
   gSleepStart = 0;
@@ -1342,19 +1361,26 @@ void burstHeartsUp(unsigned long now) {
 // -----------------------------------------------------------------
 //  1 分钟循环的沙漏倒计时（只在犯困/睡着 + 循环开启时画）
 //
-//  右下角 9x11：顶框 / 上腔 4 行 / 颈 1 行 / 下腔 4 行 / 底框
+//  左上角 13x11，外面再套 1px 边框（占 15x13，紧贴屏幕左上角）
+//  优先级最低：锁标 / 闹钟亮着的时候整块让位，等它们 1.5 秒走完再回来
 //  上腔每 15 秒掉一行沙，沙整体下沉（顶部先空）
 //  颈口每 250ms 一格往下滴，落到沙堆就停
 // -----------------------------------------------------------------
 void drawHourglass(unsigned long now) {
   if (!gLoopSleep || !gLoopStart || !(gDrowsy || gAsleep)) return;
+  // 锁标 / 闹钟优先：它们显示期间沙漏完全不画
+  if (gLockBadgeUntil  && now < gLockBadgeUntil)  return;
+  if (gClockBadgeUntil && now < gClockBadgeUntil) return;
 
   long left = (long)LOOP_SLEEP_MS - (long)(now - gLoopStart);
   if (left < 0) left = 0;
   long elapsed = (long)LOOP_SLEEP_MS - left;
 
-  const int X0 = 109, Y0 = 52;        // 左上角（宽 13，右边界 121）
-  const int W  = 13;
+  const int X0 = 1, Y0 = 1;           // 最左上角
+  const int W  = 13, H = 11;
+
+  // 1px 外框
+  u8g2.drawFrame(X0 - 1, Y0 - 1, W + 2, H + 2);
 
   // 顶框 / 底框
   for (int x = 0; x < W; x++) {
