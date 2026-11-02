@@ -40,14 +40,6 @@ f9c50bea5c0b9b4f702a80b56ab1cce90cdfd97144d98e8fca588045ca132c6b  merged.bin
 361e06de278ad95bf3c428e58f7db9e3756f907aa65197a24d083a71582c65a9  app.bin
 1d96a83c59e4c21ca55384531ada0a751aae935907c1106eeab18ddbd1f0cef4  .ino
 ```
-
-<details>
-<summary>Previous versions</summary>
-
-- [v7 — 22 expressions + dual touch keys + web control](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v7) (2px border countdown, always-on lock badge)
-
-</details>
-
 ---
 
 ## What you need (minimum)
