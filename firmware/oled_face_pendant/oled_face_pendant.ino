@@ -53,7 +53,12 @@ enum Emotion {
 #define PIN_TVCC  7      // 给 TTP223 供电（IO 输出高，2mA 级）
 #define PIN_TOUT  6      // 读 TTP223 输出（A 键）
 #define PIN_TINB  10     // B 键：第二路 TTP223 输出（高电平有效）
-#define PIN_VIB   0      // 震动传感器输出 —— 换脚只改这里（极性见 VIB_POLARITY）
+#define PIN_VIB   0      // 震动传感器输出（主）
+// 震动脚同时监听这两个：只在 GPIO0 上接过，但中途也说过 GPIO2。
+// 两个都盯，哪根动了算哪根 —— 接错一根也不会整块功能失效。
+// 上电时各自采样定「静止电平」，被内部下拉按住的空脚读数恒为静止，不会误报。
+const uint8_t VIB_PINS[] = { 0, 2 };
+const uint8_t VIB_PIN_N  = 2;
 
 bool vibPressed();     // 定义在「震动：读数 + 表情」一节，setup 里要用
 
@@ -177,12 +182,11 @@ const unsigned long VIB_LOCK_MS     = 1500;   // 重来之后这段时间不再�
 // 电平就是「在晃」。两种模块都不用改代码。
 // 想写死就把下面改成 0（低电平有效）或 1（高电平有效）。
 #define VIB_POLARITY (-1)          // -1 = 开机自测
-int gVibRestLevel = LOW;           // 「没在晃」时的电平，setup 里定
+int  gVibRestLevel[VIB_PIN_N] = { LOW, LOW };   // 各脚「没在晃」时的电平
 
 bool          gVibRaw      = false;   // 原始电平
 bool          gVibLevel    = false;   // 去抖后的电平
 unsigned long gVibChangeAt = 0;       // 电平变化时刻（去抖用）
-unsigned long gVibStuckAt  = 0;       // 连续判定「在晃」的起点（方向兜底用）
 unsigned long gVibPulseAt  = 0;       // 最近一次有效脉冲的时刻
 unsigned long gVibStartAt  = 0;       // 本次震动的起点（打量计时用）
 unsigned long gVibLockUntil = 0;      // 重来之后的静默期
@@ -670,29 +674,29 @@ void setup() {
   }
   Serial.printf("[touch] init A=%d B=%d\n", (int)digitalRead(PIN_TOUT), (int)digitalRead(PIN_TINB));
 
-  // ②.5 震动传感器。极性开机自测：静置采样 600ms，多数派电平就是
-  //     「没在晃」。上下拉跟着静止电平走，模块没接好时读数就停在静止值，
-  //     不会因为悬空把整块表情冲到 DIZZY。
-  //     万一自测被上电瞬间的晃动带偏，pollVib 还有兜底：连续 8 秒判定
-  //     「在晃」而中间一次都没松过，就说明方向反了，自动翻回来。
-  pinMode(PIN_VIB, INPUT_PULLDOWN);
-  gVibRestLevel = LOW;
-  if (VIB_POLARITY < 0) {
+  // ②.5 震动传感器。两个候选脚各自开机自测：静置采样 300ms，多数派
+  //     电平就是「没在晃」，之后看到的另一个电平就是「在晃」。
+  //     上下拉朝静止电平的方向拉，空脚读数就恒等于静止值，不会误报。
+  for (uint8_t i = 0; i < VIB_PIN_N; i++) {
+    pinMode(VIB_PINS[i], INPUT_PULLDOWN);
     int hi = 0, lo = 0;
-    unsigned long t0 = millis();
-    while (millis() - t0 < 600) {
-      if (digitalRead(PIN_VIB) == HIGH) hi++; else lo++;
-      delay(1);
+    if (VIB_POLARITY < 0) {
+      unsigned long t0 = millis();
+      while (millis() - t0 < 300) {
+        if (digitalRead(VIB_PINS[i]) == HIGH) hi++; else lo++;
+        delay(1);
+      }
+      gVibRestLevel[i] = (hi >= lo) ? HIGH : LOW;
+    } else {
+      gVibRestLevel[i] = VIB_POLARITY ? LOW : HIGH;
     }
-    gVibRestLevel = (hi >= lo) ? HIGH : LOW;
-  } else {
-    gVibRestLevel = VIB_POLARITY ? LOW : HIGH;
+    pinMode(VIB_PINS[i], gVibRestLevel[i] == HIGH ? INPUT_PULLUP : INPUT_PULLDOWN);
+    Serial.printf("[vib] gpio%d rest=%d now=%d (hi=%d lo=%d)\n",
+                  VIB_PINS[i], gVibRestLevel[i], (int)digitalRead(VIB_PINS[i]), hi, lo);
   }
-  pinMode(PIN_VIB, gVibRestLevel == HIGH ? INPUT_PULLUP : INPUT_PULLDOWN);
   gVibRaw = gVibLevel = false;
   gVibChangeAt = millis();
-  Serial.printf("[vib] init rest=%d pin=%d polarity=%s\n",
-                (int)gVibRestLevel, (int)digitalRead(PIN_VIB),
+  Serial.printf("[vib] polarity=%s, 晃一下应看到 [vib] raw 0->1\n",
                 VIB_POLARITY < 0 ? "auto" : (VIB_POLARITY ? "high" : "low"));
 
   // ③ 屏（速率必须在 begin() 之前设：begin 时才把 bus_clock 交给 HAL）
@@ -787,27 +791,23 @@ bool isSleepyState() { return gDrowsy || gAsleep; }
 // vibPressed() 把物理电平按 gVibRestLevel 翻译成"在晃 / 不在晃"，
 // 上层一律只用这个语义，不再关心极性。
 bool vibPressed() {
-  return (digitalRead(PIN_VIB) == HIGH) != (gVibRestLevel == HIGH);
+  for (uint8_t i = 0; i < VIB_PIN_N; i++) {
+    bool lvl = (digitalRead(VIB_PINS[i]) == HIGH);
+    if (lvl != (gVibRestLevel[i] == HIGH)) return true;
+  }
+  return false;
 }
 
 void pollVib(unsigned long now) {
   bool p = vibPressed();
 
-  // 兜底：如果一直判定「在晃」而且中间从没松过，方向多半是反的
-  // （自测被上电晃动带偏，或者模块型号和预期相反）。连续 8 秒就翻回来。
-  if (p) {
-    if (!gVibStuckAt) gVibStuckAt = now;
-    else if (now - gVibStuckAt > 8000) {
-      gVibRestLevel = (gVibRestLevel == HIGH) ? LOW : HIGH;
-      pinMode(PIN_VIB, gVibRestLevel == HIGH ? INPUT_PULLUP : INPUT_PULLDOWN);
-      gVibStuckAt = 0;
-      gVibRaw = gVibLevel = false;
-      gVibPulseAt = 0;
-      Serial.printf("[vib] polarity looks inverted -> rest=%d\n", (int)gVibRestLevel);
-      return;
-    }
-  } else {
-    gVibStuckAt = 0;
+  // 诊断用：原始电平一变就打印一次。晃一下应该能看到一行 raw 0->1，
+  // 没有这一行就说明信号根本没进脚，跟表情逻辑无关。
+  static bool lastPrint = false;
+  if (p != lastPrint) {
+    lastPrint = p;
+    Serial.printf("[vib] raw %d->%d (p0=%d p2=%d)\n", !p ? 1 : 0, (int)p,
+                  (int)digitalRead(VIB_PINS[0]), (int)digitalRead(VIB_PINS[1]));
   }
 
   if (p != gVibRaw) { gVibRaw = p; gVibChangeAt = now; }
