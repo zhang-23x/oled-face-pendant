@@ -12,13 +12,15 @@
 
 ## 下载
 
-**[→ 下载 v9 固件（最新）](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v9)**
+**[→ 下载 v9 固件](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v9)**　｜　震动功能在 `main` 分支，还没打包成固件
 
 | 文件 | 用途 | 大小 |
 |---|---|---|
-| [`oled-face-pendant-v9-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-merged.bin) | **推荐**。整片 4 MB 镜像，地址 `0x0` 一次刷完 | 4.0 MB |
+| [`oled-face-pendant-v9-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-merged.bin) | **推荐**。整片 4 MB 镜像，地址 `0x0` 一次刷完。**不含震动功能** | 4.0 MB |
 | [`oled-face-pendant-v9-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-app.bin) | 只刷应用分区（不动 bootloader 和分区表） | 1.0 MB |
 | [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled_face_pendant.ino) | 源码，想改就下这个 | 65.8 KB |
+
+要震动功能，从 [`main` 分支](https://github.com/zhang-23x/oled-face-pendant/blob/main/firmware/oled_face_pendant/oled_face_pendant.ino) 取源码自己编译。
 
 整片刷（**新板子用这个，最省事**）：
 
@@ -199,7 +201,7 @@ bcee8860ce9250433795d84c95fa088e6b265c8fa9fcd1c0b3f3fec2fe9c9c81  .ino
 - 只要电平还是高、或者最后一跳距今不到 2 秒，就认为**还在晃**
 - 晃它**不算「有人理它」**：不动 `lastActionTime`，所以不会推迟犯困，也不会把随机表演的轮次打乱
 
-| 当时的状态 | 屏幕 |
+| 状态 | 屏幕 |
 |---|---|
 | 清醒 | **晕**，停 2 秒 |
 | 犯困 / 睡着 | **打量** 1.9 秒 → **生气** |

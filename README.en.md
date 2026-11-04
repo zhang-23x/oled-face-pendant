@@ -12,13 +12,15 @@ No animation files, no sprite sheets — every face is drawn procedurally with e
 
 ## Download
 
-**[-> Download v9 firmware (latest)](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v9)**
+**[-> Download v9 firmware](https://github.com/zhang-23x/oled-face-pendant/releases/tag/v9)**　|　the shake feature lives on `main` and is not packaged as a binary yet
 
 | File | Use | Size |
 |---|---|---|
-| [`oled-face-pendant-v9-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-merged.bin) | **Recommended.** Full 4 MB image, flash at `0x0` | 4.0 MB |
+| [`oled-face-pendant-v9-merged.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-merged.bin) | **Recommended.** Full 4 MB image, flash at `0x0`. **No shake support** | 4.0 MB |
 | [`oled-face-pendant-v9-app.bin`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled-face-pendant-v9-app.bin) | App partition only (keeps bootloader and partition table) | 1.0 MB |
 | [`oled_face_pendant.ino`](https://github.com/zhang-23x/oled-face-pendant/releases/download/v9/oled_face_pendant.ino) | Source code | 65.8 KB |
+
+For the shake feature, take the source from [`main`](https://github.com/zhang-23x/oled-face-pendant/blob/main/firmware/oled_face_pendant/oled_face_pendant.ino) and build it yourself.
 
 Flash the whole image (easiest for a new board):
 
