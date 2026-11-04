@@ -76,7 +76,7 @@ bcee8860ce9250433795d84c95fa088e6b265c8fa9fcd1c0b3f3fec2fe9c9c81  .ino
 | Skip | Result |
 |---|---|
 | Touch modules | **Still runs.** Boots to NEUTRAL, controlled from the web page. No gestures |
-| Shake sensor | **Still runs.** GPIO2 has an internal pulldown, so an unwired pin reads "never shaking" and no face misfires. You just lose the dizzy reaction |
+| Shake sensor | **Still runs.** GPIO0 gets an internal pull matching its idle level, so an unwired pin reads "never shaking" and no face misfires. You just lose the dizzy reaction |
 | OLED | Doesn't run |
 | Acrylic case | **Still runs.** Bare board on a desk |
 
@@ -196,7 +196,7 @@ The module is not a clean square wave — one shake emits a burst of pulses. So 
 - 40 ms debounce on the level, only rising edges produce a pulse
 - the shake stays alive while the level is still on the "shaking" side, or the last pulse is under 2 s old
 - shaking is **not** "someone paid attention": it never touches `lastActionTime`, so it does not postpone the drowsy timer and does not restart the random-show round
-- **polarity is automatic:** LM393 boards come in both flavours — some idle HIGH and pull LOW on a shake, some the reverse. On boot the sketch samples the pin for 600 ms while it should be still and takes the majority level as "not shaking"; whatever else it sees afterwards is a shake. Both module types work unchanged, and serial prints `[vib] init rest=1 pin=1 polarity=auto` so you can see which one it decided. To hard-code it, set `VIB_POLARITY` to `0` (active low) or `1` (active high)
+- **polarity is automatic:** LM393 boards come in both flavours — some idle HIGH and pull LOW on a shake, some the reverse. On boot the sketch samples the pin for 600 ms while it should be still and takes the majority level as "not shaking"; whatever else it sees afterwards is a shake. Both module types work unchanged, and serial prints `[vib] init rest=0 pin=0 polarity=auto` so you can see which one it decided. To hard-code it, set `VIB_POLARITY` to `0` (active low) or `1` (active high)
 
 | State | Screen |
 |---|---|
@@ -247,7 +247,7 @@ The `P` command is how all the images in `docs/faces/` were produced. See [`tool
 | Touch module power | GPIO7 | powers the TTP223 from an IO pin (high, ~2 mA) — saves a wire |
 | Key A out | GPIO6 | TTP223 push-pull output |
 | Key B out | GPIO10 | TTP223 push-pull output, internal pulldown |
-| Shake sensor out | GPIO2 | active-high, internal pulldown; an unwired pin reads "never shaking" |
+| Shake sensor out | GPIO0 | polarity auto-detected at boot; an unwired pin reads "never shaking" |
 | A/B GND | GND | common ground required |
 
 Key A's polarity is auto-detected at boot (12 samples). Key B is **always active-high**, because the internal pulldown guarantees it can only ever pull high when touched.

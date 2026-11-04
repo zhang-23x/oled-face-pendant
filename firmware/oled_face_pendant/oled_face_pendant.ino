@@ -53,7 +53,7 @@ enum Emotion {
 #define PIN_TVCC  7      // 给 TTP223 供电（IO 输出高，2mA 级）
 #define PIN_TOUT  6      // 读 TTP223 输出（A 键）
 #define PIN_TINB  10     // B 键：第二路 TTP223 输出（高电平有效）
-#define PIN_VIB   2      // 震动传感器输出 —— 换脚只改这里（极性见 VIB_POLARITY）
+#define PIN_VIB   0      // 震动传感器输出 —— 换脚只改这里（极性见 VIB_POLARITY）
 
 bool vibPressed();     // 定义在「震动：读数 + 表情」一节，setup 里要用
 
@@ -182,6 +182,7 @@ int gVibRestLevel = LOW;           // 「没在晃」时的电平，setup 里定
 bool          gVibRaw      = false;   // 原始电平
 bool          gVibLevel    = false;   // 去抖后的电平
 unsigned long gVibChangeAt = 0;       // 电平变化时刻（去抖用）
+unsigned long gVibStuckAt  = 0;       // 连续判定「在晃」的起点（方向兜底用）
 unsigned long gVibPulseAt  = 0;       // 最近一次有效脉冲的时刻
 unsigned long gVibStartAt  = 0;       // 本次震动的起点（打量计时用）
 unsigned long gVibLockUntil = 0;      // 重来之后的静默期
@@ -670,8 +671,10 @@ void setup() {
   Serial.printf("[touch] init A=%d B=%d\n", (int)digitalRead(PIN_TOUT), (int)digitalRead(PIN_TINB));
 
   // ②.5 震动传感器。极性开机自测：静置采样 600ms，多数派电平就是
-  //     「没在晃」。上拉/下拉跟着静止电平走，模块没接好时读数稳定在
-  //     静止值，不会因为悬空把整块表情冲到 DIZZY。
+  //     「没在晃」。上下拉跟着静止电平走，模块没接好时读数就停在静止值，
+  //     不会因为悬空把整块表情冲到 DIZZY。
+  //     万一自测被上电瞬间的晃动带偏，pollVib 还有兜底：连续 8 秒判定
+  //     「在晃」而中间一次都没松过，就说明方向反了，自动翻回来。
   pinMode(PIN_VIB, INPUT_PULLDOWN);
   gVibRestLevel = LOW;
   if (VIB_POLARITY < 0) {
@@ -685,7 +688,7 @@ void setup() {
   } else {
     gVibRestLevel = VIB_POLARITY ? LOW : HIGH;
   }
-  pinMode(PIN_VIB, gVibRestLevel == HIGH ? INPUT_PULLDOWN : INPUT_PULLUP);
+  pinMode(PIN_VIB, gVibRestLevel == HIGH ? INPUT_PULLUP : INPUT_PULLDOWN);
   gVibRaw = gVibLevel = false;
   gVibChangeAt = millis();
   Serial.printf("[vib] init rest=%d pin=%d polarity=%s\n",
@@ -789,6 +792,24 @@ bool vibPressed() {
 
 void pollVib(unsigned long now) {
   bool p = vibPressed();
+
+  // 兜底：如果一直判定「在晃」而且中间从没松过，方向多半是反的
+  // （自测被上电晃动带偏，或者模块型号和预期相反）。连续 8 秒就翻回来。
+  if (p) {
+    if (!gVibStuckAt) gVibStuckAt = now;
+    else if (now - gVibStuckAt > 8000) {
+      gVibRestLevel = (gVibRestLevel == HIGH) ? LOW : HIGH;
+      pinMode(PIN_VIB, gVibRestLevel == HIGH ? INPUT_PULLUP : INPUT_PULLDOWN);
+      gVibStuckAt = 0;
+      gVibRaw = gVibLevel = false;
+      gVibPulseAt = 0;
+      Serial.printf("[vib] polarity looks inverted -> rest=%d\n", (int)gVibRestLevel);
+      return;
+    }
+  } else {
+    gVibStuckAt = 0;
+  }
+
   if (p != gVibRaw) { gVibRaw = p; gVibChangeAt = now; }
   if (p == gVibLevel) return;
   if ((now - gVibChangeAt) < VIB_DEBOUNCE_MS) return;
