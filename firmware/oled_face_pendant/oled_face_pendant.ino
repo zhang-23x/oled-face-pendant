@@ -12,6 +12,9 @@
  *    4. 待机：25s 犯困、30s 睡着
  *    5. 犯困时右上角冒 z，睡着后 z 越来越大、冒得越来越快（打呼噜）
  *    6. 清醒时触摸 → 左右两侧冒小爱心
+ *    7. 震动传感器（高有效）：清醒时晃它 → DIZZY 晕；
+ *       犯困/睡着时晃它 → INVESTIGATE 打量一会儿再转 ANGRY 生气。
+ *       一次晃动会吐出一串脉冲，这里把它们合成同一个事件，不重复触发。
  *
  *  原版核心（算法未改）：
  *    · 眼睛/嘴都是同一种圆角矩形图元，靠缓动逼近目标值 → 丝滑
@@ -50,6 +53,7 @@ enum Emotion {
 #define PIN_TVCC  7      // 给 TTP223 供电（IO 输出高，2mA 级）
 #define PIN_TOUT  6      // 读 TTP223 输出（A 键）
 #define PIN_TINB  10     // B 键：第二路 TTP223 输出（高电平有效）
+#define PIN_VIB   5      // 震动传感器输出（高电平有效）—— 换脚只改这里
 
 // ---------------- 双键触摸状态 ----------------
 // 一颗按键的完整状态：去抖 + 长按 + 双击 + 按下瞬间的睡眠快照
@@ -143,6 +147,24 @@ unsigned long gBoostUntil = 0;
 // 已由文件顶部的 keys[] 取代）
 unsigned long gYawnUntil    = 0;       // 打哈欠结束时刻
 unsigned long gHicUntil     = 0;       // 打嗝结束时刻
+
+// ---------------- 震动传感器 ----------------
+// 一次晃动会吐出一串高电平脉冲。这里的规则是：
+//   只要相邻脉冲的间隔小于 VIB_HOLD_MS，就都算同一次晃动；
+//   最后一个脉冲之后再过 VIB_HOLD_MS 没有新脉冲，才把脸还回去。
+// 震动全程不碰 gLastTouch / lastActionTime —— 晃它不等于「有人理它」，
+// 所以不会推迟犯困、也不会打乱随机表演的轮次。
+const unsigned long VIB_DEBOUNCE_MS = 40;     // 单个脉冲去抖（接触抖动比这快得多）
+const unsigned long VIB_HOLD_MS     = 2000;   // 最后一跳之后表情再留多久（DIZZY 要长一点）
+const unsigned long VIB_TOUCH_GUARD = 1200;   // 触摸后这段时间内震动不抢画面（要盖住 A 长按的 LOVE 段）
+const unsigned long VIB_INVEST_MS   = 1900;   // 困/睡时：打量多久后转生气
+
+bool          gVibRaw      = false;   // 原始电平
+bool          gVibLevel    = false;   // 去抖后的电平
+unsigned long gVibChangeAt = 0;       // 电平变化时刻（去抖用）
+unsigned long gVibPulseAt  = 0;       // 最近一次有效脉冲的时刻
+unsigned long gVibStartAt  = 0;       // 本次震动的起点（打量计时用）
+uint8_t       gVibStage    = 0;       // 0=没在震 1=打量 2=生气 3=DIZZY
 
 // =================================================================
 //  Wi-Fi 热点 + 网页控制台（不需要装 App、不需要路由器）
@@ -625,6 +647,13 @@ void setup() {
   }
   Serial.printf("[touch] init A=%d B=%d\n", (int)digitalRead(PIN_TOUT), (int)digitalRead(PIN_TINB));
 
+  // ②.5 震动传感器（高有效）。内部下拉：模块没接好时稳定在"没震"，
+  //     不会因为悬空而把整块表情冲到 DIZZY。
+  pinMode(PIN_VIB, INPUT_PULLDOWN);
+  gVibRaw = gVibLevel = (digitalRead(PIN_VIB) == HIGH);
+  gVibChangeAt = millis();
+  Serial.printf("[vib] init level=%d\n", (int)gVibLevel);
+
   // ③ 屏（速率必须在 begin() 之前设：begin 时才把 bus_clock 交给 HAL）
   u8g2.setBusClock(400000);
   Wire.setClock(400000);
@@ -710,6 +739,67 @@ void pollKey(int i, unsigned long now) {
 }
 
 bool isSleepyState() { return gDrowsy || gAsleep; }
+
+// ---------------- 震动：读数 + 表情 ----------------
+// 40ms 去抖，只认上升沿。一串脉冲会不断刷新 gVibPulseAt，
+// 于是「还在晃」这件事对上层就是一个持续的布尔量。
+void pollVib(unsigned long now) {
+  bool r = (digitalRead(PIN_VIB) == HIGH);
+  if (r != gVibRaw) { gVibRaw = r; gVibChangeAt = now; }
+  if (r == gVibLevel) return;
+  if ((now - gVibChangeAt) < VIB_DEBOUNCE_MS) return;
+  gVibLevel = r;
+  if (r) gVibPulseAt = now;
+}
+
+// 震动表情：
+//   清醒      → DIZZY（螺旋眼），停留 VIB_HOLD_MS
+//   犯困/睡着 → INVESTIGATE 打量，VIB_INVEST_MS 之后转 ANGRY
+// 触摸永远优先：触摸后 VIB_TOUCH_GUARD 之内完全不出手，
+// 等触摸的表情播完，若还在晃再从头开始打量/晕。
+void vibLogic(unsigned long now) {
+  // 还在晃 = 电平当下就是高，或者最后一跳还在 HOLD 窗口里。
+  // 前一条照顾"一直保持高"（倾斜开关/持续摇晃），后一条照顾一串短脉冲。
+  bool pulse     = gVibLevel || (gVibPulseAt && (now - gVibPulseAt) < VIB_HOLD_MS);
+  bool touchBusy = (now - gLastTouch) < VIB_TOUCH_GUARD;
+
+  if (!pulse || touchBusy) {
+    if (!gVibStage) return;
+    gVibStage  = 0;
+    gVibStartAt = 0;
+    if (touchBusy) return;                 // 被触摸接管：表情归触摸那条路管
+    // 还脸：别把哈欠、犯困、睡着这三种状态画错
+    if (gYawnUntil && now < gYawnUntil) setEmotion(YAWN);
+    else if (gAsleep)   setEmotion(SLEEPING);
+    else if (gDrowsy)   setEmotion(SLEEPY);
+    else              { setEmotion(NEUTRAL); gIdleShowAt = now + 600; }
+    Serial.println("[vib] end");
+    return;
+  }
+
+  bool sleepy = isSleepyState();
+  if (gVibStage == 0) {
+    gVibStartAt = now;
+    gVibStage   = sleepy ? 1 : 3;
+    Serial.printf("[vib] start (%s)\n", sleepy ? "sleepy" : "awake");
+  } else if (sleepy && gVibStage == 3) {   // 晃着晃着犯困了 → 改走打量
+    gVibStage = 1; gVibStartAt = now;
+    Serial.println("[vib] became sleepy -> INVESTIGATE");
+  } else if (!sleepy && gVibStage != 3) {  // 被叫醒 → 回到晕
+    gVibStage = 3;
+    Serial.println("[vib] became awake -> DIZZY");
+  } else if (gVibStage == 1 && (now - gVibStartAt) >= VIB_INVEST_MS) {
+    gVibStage = 2;
+    Serial.println("[vib] -> ANGRY");
+  }
+
+  // 目标表情（别的地方可能刚覆盖过，比如犯困计时到点切了 YAWN）
+  Emotion want = (gVibStage == 1) ? INVESTIGATE : (gVibStage == 2 ? ANGRY : DIZZY);
+  if (currentEmotion != want) {
+    setEmotion(want);
+    gBoostUntil = now + 200;
+  }
+}
 
 void wakeUpByTouch(unsigned long now) {
   gLastTouch     = now;
@@ -954,6 +1044,12 @@ void loop() {
     Serial.println("[A] long -> LOVE + hearts");
   }
 
+  // ---------- 1.7 震动传感器 ----------
+  // 放在触摸和 LOVE 段之后：这样它压上去的就是「最终该显示的那张脸」，
+  // 不会被震动表情闪一下再被触摸表情盖回来。
+  pollVib(now);
+  vibLogic(now);
+
   // ---------- 1.5 手机通过网页发来的命令 ----------
   // 串口命令：一行一条，和网页共用 execCmd（方便调试）
   while (Serial.available()) {
@@ -982,13 +1078,17 @@ void loop() {
     gIdleShowAt = now + IDLE_FIRST_MS;
   }
   if (!gDrowsy && !gAsleep && gIdleShowIdx < gIdleTotal && now >= gIdleShowAt) {
-    Emotion e = CYCLE[gIdlePick[gIdleShowIdx]];
-    setEmotion(e);
-    gBoostUntil = now + 200;             // 切换时快一点到位
-    Serial.printf("[idle] show %d/%d -> face %d\n",
-                  (int)gIdleShowIdx + 1, (int)gIdleTotal, (int)e);
-    gIdleShowIdx++;
-    gIdleShowAt = now + IDLE_FACE_MS;
+    if (gVibStage) {                     // 正在晃：表演先按住，别把 DIZZY 顶掉
+      gIdleShowAt = now + 300;
+    } else {
+      Emotion e = CYCLE[gIdlePick[gIdleShowIdx]];
+      setEmotion(e);
+      gBoostUntil = now + 200;             // 切换时快一点到位
+      Serial.printf("[idle] show %d/%d -> face %d\n",
+                    (int)gIdleShowIdx + 1, (int)gIdleTotal, (int)e);
+      gIdleShowIdx++;
+      gIdleShowAt = now + IDLE_FACE_MS;
+    }
   }
 
   // ---------- 2. 无人理会的计时（困之前先打个哈欠） ----------
@@ -1034,7 +1134,7 @@ void loop() {
   if (gLoopStart && !gDrowsy && !gAsleep) { gLoopStart = 0; }
 
   // ---------- 2.5 打呼噜：犯困小 z，睡着 z 变大变快 ----------
-  if ((gAsleep || gDrowsy) && !gYawnUntil) {
+  if ((gAsleep || gDrowsy) && !gYawnUntil && !gVibStage) {
     if (now >= gNextZeeAt) {
       if (gAsleep) {
         // 睡越久 → 尺寸越大、间隔越短（0~40s 内渐进到最快）
@@ -1069,7 +1169,7 @@ void loop() {
   }
 
   // ---------- 4. 活跃时的随机小动作（原版状态机） ----------
-  if (!gAsleep && !gDrowsy && (now - lastActionTime > actionInterval)) {
+  if (!gAsleep && !gDrowsy && !gVibStage && (now - lastActionTime > actionInterval)) {
     lastActionTime = now;
     actionInterval = random(1500, 4000);
 
@@ -1084,7 +1184,8 @@ void loop() {
   }
 
   // ---------- 6. 睡着时的呼吸起伏（越睡越急促） ----------
-  if (gAsleep) {
+  // 被晃得显示 INVESTIGATE / ANGRY 时先别呼吸，否则眼睛被压成一条缝，表情看不见
+  if (gAsleep && !gVibStage) {
     float sleepSec = (now - gSleepStart) / 1000.0f;
     float freq = 0.0018f + min(0.0016f, sleepSec * 0.00004f);   // 40s 后频率翻倍
     float breath = 3.5f + 1.5f * sinf(now * freq);               // 2.0 ~ 5.0
@@ -1218,9 +1319,12 @@ void execCmd(const char* cmd, unsigned long now) {
     case 'Q': {                             // 查倒计时内部状态
       long elapsed = gLoopStart ? (long)(now - gLoopStart) : -1;
       long remain  = gLoopStart ? (long)LOOP_SLEEP_MS - elapsed : -1;
+      long vibAge  = gVibPulseAt ? (long)(now - gVibPulseAt) : -1;
       Serial.printf("LOOP on=%d start=%lu now=%lu elapsed=%ld remain=%ld drowsy=%d asleep=%d\n",
                     (int)gLoopSleep, gLoopStart, now, elapsed, remain,
                     (int)gDrowsy, (int)gAsleep);
+      Serial.printf("VIB  stage=%d level=%d pulseAge=%ld raw=%d\n",
+                    (int)gVibStage, (int)gVibLevel, vibAge, (int)gVibRaw);
       break;
     }
 
@@ -1258,6 +1362,11 @@ void execCmd(const char* cmd, unsigned long now) {
     case 'O': onB_Single(now, isSleepyState());  Serial.println("[sim] B single"); break;
     case 'J': onB_Double(now, isSleepyState());  Serial.println("[sim] B double"); break;
     case 'N': onB_Long  (now);                   Serial.println("[sim] B long");   break;
+
+    case 'V':                               // 模拟一次震动脉冲（不用真晃）
+      gVibPulseAt = now;
+      Serial.printf("[cmd] vibrate pulse (stage=%d)\n", (int)gVibStage);
+      break;
 
     case 'P':                               // 调试：dump 当前帧缓冲（hex）
       gDumpReq = true;
