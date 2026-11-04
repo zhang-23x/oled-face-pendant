@@ -53,7 +53,9 @@ enum Emotion {
 #define PIN_TVCC  7      // 给 TTP223 供电（IO 输出高，2mA 级）
 #define PIN_TOUT  6      // 读 TTP223 输出（A 键）
 #define PIN_TINB  10     // B 键：第二路 TTP223 输出（高电平有效）
-#define PIN_VIB   0      // 震动传感器输出（高电平有效）—— 换脚只改这里
+#define PIN_VIB   0      // 震动传感器输出 —— 换脚只改这里（极性见 VIB_ACTIVE_HIGH）
+
+bool vibPressed();     // 定义在「震动：读数 + 表情」一节，setup 里要用
 
 // ---------------- 双键触摸状态 ----------------
 // 一颗按键的完整状态：去抖 + 长按 + 双击 + 按下瞬间的睡眠快照
@@ -151,19 +153,36 @@ unsigned long gHicUntil     = 0;       // 打嗝结束时刻
 // ---------------- 震动传感器 ----------------
 // 一次晃动会吐出一串高电平脉冲。这里的规则是：
 //   只要相邻脉冲的间隔小于 VIB_HOLD_MS，就都算同一次晃动；
-//   最后一个脉冲之后再过 VIB_HOLD_MS 没有新脉冲，才把脸还回去。
-// 震动全程不碰 gLastTouch / lastActionTime —— 晃它不等于「有人理它」，
-// 所以不会推迟犯困、也不会打乱随机表演的轮次。
+//   最后一个脉冲之后再过这么久没有新脉冲，才把脸还回去。
+//
+// 两条路径的收尾方式不同：
+//   清醒      → DIZZY 停手后保持 VIB_DIZZY_MS（5 秒），然后还脸
+//   犯困/睡着 → 打量 VIB_INVEST_MS → 生气 → 停手后【整轮表情从头开始】
+//               （清掉困/睡状态、重新洗 3/6/9 的签、重新计 25 秒）
+//
+// 震动本身不碰 lastActionTime —— 只晃不摸不会推迟犯困。
+// 但「生气之后重来」那一下会重置 gLastTouch，那是故意的：
+// 用户要的就是"晃醒它，重新演一轮"。
 const unsigned long VIB_DEBOUNCE_MS = 40;     // 单个脉冲去抖（接触抖动比这快得多）
-const unsigned long VIB_HOLD_MS     = 2000;   // 最后一跳之后表情再留多久（DIZZY 要长一点）
+const unsigned long VIB_HOLD_MS     = 2000;   // 脉冲聚合窗口：最后一下之后这么久算"还在晃"
+const unsigned long VIB_DIZZY_MS    = 5000;   // 清醒：晕在停手之后还要留 5 秒
 const unsigned long VIB_TOUCH_GUARD = 1200;   // 触摸后这段时间内震动不抢画面（要盖住 A 长按的 LOVE 段）
 const unsigned long VIB_INVEST_MS   = 1900;   // 困/睡时：打量多久后转生气
+const unsigned long VIB_ANGRY_MS    = 2000;   // 困/睡时：生气至少露这么久，之后才重来
+const unsigned long VIB_LOCK_MS     = 1500;   // 重来之后这段时间不再响应震动（防止还在晃就立刻又进 DIZZY）
+
+// 有效极性。SW-420 / SW-18010P 这类模块用 LM393 比较器，输出是
+// 「静止拉高、晃到阈值才拉低」，实测静态电平就是高 —— 所以默认低电平触发。
+// 如果你手上的模块反过来（静态低、晃高），把这里改成 1。
+#define VIB_ACTIVE_HIGH 0
 
 bool          gVibRaw      = false;   // 原始电平
 bool          gVibLevel    = false;   // 去抖后的电平
 unsigned long gVibChangeAt = 0;       // 电平变化时刻（去抖用）
 unsigned long gVibPulseAt  = 0;       // 最近一次有效脉冲的时刻
 unsigned long gVibStartAt  = 0;       // 本次震动的起点（打量计时用）
+unsigned long gVibLockUntil = 0;      // 重来之后的静默期
+unsigned long gAngryAt     = 0;       // 进入生气那一刻（生气要露够 VIB_ANGRY_MS）
 uint8_t       gVibStage    = 0;       // 0=没在震 1=打量 2=生气 3=DIZZY
 
 // =================================================================
@@ -647,12 +666,17 @@ void setup() {
   }
   Serial.printf("[touch] init A=%d B=%d\n", (int)digitalRead(PIN_TOUT), (int)digitalRead(PIN_TINB));
 
-  // ②.5 震动传感器（高有效）。内部下拉：模块没接好时稳定在"没震"，
+  // ②.5 震动传感器。上拉/下拉按有效极性走：模块没接好时稳定在"没震"，
   //     不会因为悬空而把整块表情冲到 DIZZY。
-  pinMode(PIN_VIB, INPUT_PULLDOWN);
-  gVibRaw = gVibLevel = (digitalRead(PIN_VIB) == HIGH);
+  #if VIB_ACTIVE_HIGH
+    pinMode(PIN_VIB, INPUT_PULLDOWN);
+  #else
+    pinMode(PIN_VIB, INPUT_PULLUP);
+  #endif
+  gVibRaw = gVibLevel = vibPressed();
   gVibChangeAt = millis();
-  Serial.printf("[vib] init level=%d\n", (int)gVibLevel);
+  Serial.printf("[vib] init shake=%d (pin=%d active_high=%d)\n",
+                (int)gVibLevel, (int)digitalRead(PIN_VIB), (int)VIB_ACTIVE_HIGH);
 
   // ③ 屏（速率必须在 begin() 之前设：begin 时才把 bus_clock 交给 HAL）
   u8g2.setBusClock(400000);
@@ -743,31 +767,69 @@ bool isSleepyState() { return gDrowsy || gAsleep; }
 // ---------------- 震动：读数 + 表情 ----------------
 // 40ms 去抖，只认上升沿。一串脉冲会不断刷新 gVibPulseAt，
 // 于是「还在晃」这件事对上层就是一个持续的布尔量。
+// vibPressed() 把物理电平按 VIB_ACTIVE_HIGH 翻译成"在晃 / 不在晃"，
+// 上层一律只用这个语义，不再关心极性。
+bool vibPressed() {
+  bool raw = (digitalRead(PIN_VIB) == HIGH);
+  return VIB_ACTIVE_HIGH ? raw : !raw;
+}
+
 void pollVib(unsigned long now) {
-  bool r = (digitalRead(PIN_VIB) == HIGH);
-  if (r != gVibRaw) { gVibRaw = r; gVibChangeAt = now; }
-  if (r == gVibLevel) return;
+  bool p = vibPressed();
+  if (p != gVibRaw) { gVibRaw = p; gVibChangeAt = now; }
+  if (p == gVibLevel) return;
   if ((now - gVibChangeAt) < VIB_DEBOUNCE_MS) return;
-  gVibLevel = r;
-  if (r) gVibPulseAt = now;
+  gVibLevel = p;
+  if (p) gVibPulseAt = now;
+}
+
+// 「整轮表情从头开始」：清掉困/睡状态，重新洗 3/6/9 的签，重新计 25 秒。
+// 晃醒它之后要的就是这个 —— 而不是回到睡着继续打呼噜。
+void vibRestartIdle(unsigned long now) {
+  gDrowsy        = false;
+  gAsleep        = false;
+  gSleepAt       = 0;
+  gSleepStart    = 0;
+  gLoopStart     = 0;
+  gYawnUntil     = 0;
+  gLastTouch     = now;              // 重新计 25 秒
+  lastActionTime = now;
+  for (int i = 0; i < ZEE_MAX; i++) zees[i].on = false;
+  gIdleInit      = false;            // 下一帧重新抽签
+  gIdleShowIdx   = 0;
+  setEmotion(NEUTRAL);
+  gBoostUntil    = now + 200;
+  gVibLockUntil  = now + VIB_LOCK_MS;
 }
 
 // 震动表情：
-//   清醒      → DIZZY（螺旋眼），停留 VIB_HOLD_MS
-//   犯困/睡着 → INVESTIGATE 打量，VIB_INVEST_MS 之后转 ANGRY
+//   清醒      → DIZZY（螺旋眼），停手后保持 VIB_DIZZY_MS（5 秒）再还脸
+//   犯困/睡着 → INVESTIGATE 打量 VIB_INVEST_MS → ANGRY → 停手后整轮从头开始
 // 触摸永远优先：触摸后 VIB_TOUCH_GUARD 之内完全不出手，
 // 等触摸的表情播完，若还在晃再从头开始打量/晕。
 void vibLogic(unsigned long now) {
-  // 还在晃 = 电平当下就是高，或者最后一跳还在 HOLD 窗口里。
+  // 还在晃 = 电平当下就是高，或者最后一跳还在聚合窗口里。
   // 前一条照顾"一直保持高"（倾斜开关/持续摇晃），后一条照顾一串短脉冲。
-  bool pulse     = gVibLevel || (gVibPulseAt && (now - gVibPulseAt) < VIB_HOLD_MS);
+  // DIZZY 那段窗口拉长到 5 秒，其它状态仍是 2 秒。
+  // 生气另有自己的计时：脉冲窗口可能比打量先到期（打量 1.9s 就吃掉了 2s 窗口），
+  // 不单独锁住的话 ANGRY 只会闪 0.1 秒就重来。
+  unsigned long hold = (gVibStage == 3) ? VIB_DIZZY_MS : VIB_HOLD_MS;
+  bool angryPending = (gVibStage == 2) && gAngryAt && (now - gAngryAt < VIB_ANGRY_MS);
+  bool pulse     = angryPending || gVibLevel || (gVibPulseAt && (now - gVibPulseAt) < hold);
   bool touchBusy = (now - gLastTouch) < VIB_TOUCH_GUARD;
 
   if (!pulse || touchBusy) {
     if (!gVibStage) return;
-    gVibStage  = 0;
+    uint8_t wasStage = gVibStage;
+    gVibStage   = 0;
     gVibStartAt = 0;
+    gAngryAt    = 0;
     if (touchBusy) return;                 // 被触摸接管：表情归触摸那条路管
+    if (wasStage == 2) {                   // 已经生过气 → 整轮表情从头开始
+      Serial.println("[vib] end (angry) -> restart idle");
+      vibRestartIdle(now);
+      return;
+    }
     // 还脸：别把哈欠、犯困、睡着这三种状态画错
     if (gYawnUntil && now < gYawnUntil) setEmotion(YAWN);
     else if (gAsleep)   setEmotion(SLEEPING);
@@ -779,6 +841,7 @@ void vibLogic(unsigned long now) {
 
   bool sleepy = isSleepyState();
   if (gVibStage == 0) {
+    if (gVibLockUntil && now < gVibLockUntil) return;   // 刚重来，先安静一会儿
     gVibStartAt = now;
     gVibStage   = sleepy ? 1 : 3;
     Serial.printf("[vib] start (%s)\n", sleepy ? "sleepy" : "awake");
@@ -790,6 +853,7 @@ void vibLogic(unsigned long now) {
     Serial.println("[vib] became awake -> DIZZY");
   } else if (gVibStage == 1 && (now - gVibStartAt) >= VIB_INVEST_MS) {
     gVibStage = 2;
+    gAngryAt  = now;
     Serial.println("[vib] -> ANGRY");
   }
 

@@ -187,21 +187,24 @@ margin, so it can hug the top-left corner without being clipped.
 | **B double tap** | toggle 60 s sleep loop | ignored |
 | **B long press** | restart the OLED (re-runs `u8g2.begin()`, also rescues a stuck I²C bus) | same |
 | **A+B hold 2 s** | lock / unlock keys A and B | same |
-| **Shake it** | dizzy (spiral eyes) for 2 s | investigate for 1.9 s, then angry |
+| **Shake it** | dizzy (spiral eyes) for 5 s | investigate for 1.9 s, angry for 2 s, then the whole face show restarts |
 
 ### What shaking does
 
-The module is not a clean square wave — one shake emits a burst of HIGH pulses. So the rule is "a burst counts as one shake":
+The module is not a clean square wave — one shake emits a burst of pulses. So the rule is "a burst counts as one shake":
 
 - 40 ms debounce on the level, only rising edges produce a pulse
-- the shake stays alive while the level is HIGH, or the last pulse is under 2 s old
+- the shake stays alive while the level is still on the "shaking" side, or the last pulse is under 2 s old
 - shaking is **not** "someone paid attention": it never touches `lastActionTime`, so it does not postpone the drowsy timer and does not restart the random-show round
+- **polarity:** SW-420 / SW-18010P style modules use an LM393 that idles HIGH and pulls LOW when the threshold trips, so `VIB_ACTIVE_HIGH 0` treats a low level as shaking. Flip it to `1` if your module is the other way round — the internal pull-up/pull-down follows the same switch
 
 | State | Screen |
 |---|---|
-| Awake | **dizzy**, held 2 s |
-| Drowsy / asleep | **investigate** 1.9 s → **angry** |
+| Awake | **dizzy**, and it lingers 5 s after you stop |
+| Drowsy / asleep | **investigate** 1.9 s → **angry** 2 s → **the whole face show restarts** (sleep state cleared, a fresh 3/6/9 draw, the 25 s timer reset) |
 | Mid-touch | Touch wins. For 1.2 s after a touch the sensor changes nothing; if a shake is running when the touch lands, the dizzy face is dropped and the touched face keeps the screen |
+
+The second row means "shake it awake": while it is asleep a shake is not a greeting you then sleep through — it gets annoyed and starts over. While awake it just goes dizzy for a moment and carries on.
 
 While the shake face is on screen, **the z's, the sleeping breathing, the random actions and the next idle-performance step are all suspended** — otherwise they steal the frame. The breathing one matters most: it squashes the eyes into a slit, and `investigate` becomes invisible.
 
