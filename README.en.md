@@ -44,14 +44,15 @@ bcee8860ce9250433795d84c95fa088e6b265c8fa9fcd1c0b3f3fec2fe9c9c81  .ino
 
 ## What you need (minimum)
 
-### Four parts, none optional
+### Five parts
 
 | # | Part | Spec | ~Price |
 |---|---|---|---|
 | 1 | **ESP32-C3 dev board** | 4 MB flash, USB-C, native USB (CDC) | $2 |
 | 2 | **0.96" OLED** | SSD1306, **4-pin I2C** (GND/VCC/SCL/SDA), 128x64 | $1.5 |
 | 3 | **TTP223 touch modules** | capacitive, digital OUT | $0.3 x2 |
-| 4 | **Jumper wires + USB cable** | 8 female-female; cable must carry data | $0.5 |
+| 4 | **Shake sensor** | SW-420 / SW-18010P class, **HIGH output** | $0.3 |
+| 5 | **Jumper wires + USB cable** | 8 female-female; cable must carry data | $0.5 |
 
 **About $4-5 total.**
 
@@ -73,6 +74,7 @@ bcee8860ce9250433795d84c95fa088e6b265c8fa9fcd1c0b3f3fec2fe9c9c81  .ino
 | Skip | Result |
 |---|---|
 | Touch modules | **Still runs.** Boots to NEUTRAL, controlled from the web page. No gestures |
+| Shake sensor | **Still runs.** GPIO5 has an internal pulldown, so an unwired pin reads "never shaking" and no face misfires. You just lose the dizzy reaction |
 | OLED | Doesn't run |
 | Acrylic case | **Still runs.** Bare board on a desk |
 
@@ -183,6 +185,23 @@ margin, so it can hug the top-left corner without being clipped.
 | **B double tap** | toggle 60 s sleep loop | ignored |
 | **B long press** | restart the OLED (re-runs `u8g2.begin()`, also rescues a stuck I²C bus) | same |
 | **A+B hold 2 s** | lock / unlock keys A and B | same |
+| **Shake it** | dizzy (spiral eyes) for 2 s | investigate for 1.9 s, then angry |
+
+### What shaking does
+
+The module is not a clean square wave — one shake emits a burst of HIGH pulses. So the rule is "a burst counts as one shake":
+
+- 40 ms debounce on the level, only rising edges produce a pulse
+- the shake stays alive while the level is HIGH, or the last pulse is under 2 s old
+- shaking is **not** "someone paid attention": it never touches `lastActionTime`, so it does not postpone the drowsy timer and does not restart the random-show round
+
+| State | Screen |
+|---|---|
+| Awake | **dizzy**, held 2 s |
+| Drowsy / asleep | **investigate** 1.9 s → **angry** |
+| Mid-touch | Touch wins. For 1.2 s after a touch the sensor changes nothing; if a shake is running when the touch lands, the dizzy face is dropped and the touched face keeps the screen |
+
+While the shake face is on screen, **the z's, the sleeping breathing, the random actions and the next idle-performance step are all suspended** — otherwise they steal the frame. The breathing one matters most: it squashes the eyes into a slit, and `investigate` becomes invisible.
 
 **What "lock" actually means:** it only disables gesture recognition on A and B, and draws a small padlock in the top-left corner. Every timer, the sleep state machine, the 60 s loop, the random face show, and the auto-rotation keep running untouched. Unlocking resumes with no state reset.
 
@@ -201,10 +220,12 @@ The page lets you tap any of the 22 faces, see live status (current face, bright
 
 | Command | Effect |
 |---|---|
-| `0`–`21` | switch to that face |
+| `F0`–`F21` | switch to that face |
 | `P` | dump the current 1024-byte frame buffer as `[dump]<face>:<2048 hex chars>` |
 | `K` | toggle loop mode (same as B double tap) |
 | `R` | toggle lock (same as A+B hold) |
+| `V` | fake one shake pulse — verify dizzy / investigate→angry without physically shaking it |
+| `Q` | print the loop countdown plus shake state (`VIB stage/level/pulseAge/raw`) |
 
 The `P` command is how all the images in `docs/faces/` were produced. See [`tools/dump_preview.py`](tools/dump_preview.py).
 
@@ -221,6 +242,7 @@ The `P` command is how all the images in `docs/faces/` were produced. See [`tool
 | Touch module power | GPIO7 | powers the TTP223 from an IO pin (high, ~2 mA) — saves a wire |
 | Key A out | GPIO6 | TTP223 push-pull output |
 | Key B out | GPIO10 | TTP223 push-pull output, internal pulldown |
+| Shake sensor out | GPIO5 | active-high, internal pulldown; an unwired pin reads "never shaking" |
 | A/B GND | GND | common ground required |
 
 Key A's polarity is auto-detected at boot (12 samples). Key B is **always active-high**, because the internal pulldown guarantees it can only ever pull high when touched.
