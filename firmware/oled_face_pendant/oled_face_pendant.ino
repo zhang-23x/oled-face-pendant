@@ -53,7 +53,7 @@ enum Emotion {
 #define PIN_TVCC  7      // 给 TTP223 供电（IO 输出高，2mA 级）
 #define PIN_TOUT  6      // 读 TTP223 输出（A 键）
 #define PIN_TINB  10     // B 键：第二路 TTP223 输出（高电平有效）
-#define PIN_VIB   0      // 震动传感器输出 —— 换脚只改这里（极性见 VIB_ACTIVE_HIGH）
+#define PIN_VIB   2      // 震动传感器输出 —— 换脚只改这里（极性见 VIB_POLARITY）
 
 bool vibPressed();     // 定义在「震动：读数 + 表情」一节，setup 里要用
 
@@ -171,10 +171,13 @@ const unsigned long VIB_INVEST_MS   = 1900;   // 困/睡时：打量多久后转
 const unsigned long VIB_ANGRY_MS    = 2000;   // 困/睡时：生气至少露这么久，之后才重来
 const unsigned long VIB_LOCK_MS     = 1500;   // 重来之后这段时间不再响应震动（防止还在晃就立刻又进 DIZZY）
 
-// 有效极性。SW-420 / SW-18010P 这类模块用 LM393 比较器，输出是
-// 「静止拉高、晃到阈值才拉低」，实测静态电平就是高 —— 所以默认低电平触发。
-// 如果你手上的模块反过来（静态低、晃高），把这里改成 1。
-#define VIB_ACTIVE_HIGH 0
+// 极性。这块传感器在「没晃」时输出什么电平不能想当然：同样是 LM393 板子，
+// 有的静态高、晃到阈值才拉低，有的反过来。所以默认开机自测 —— 上电后
+// 600ms 静置采样，把出现更多的那个电平当成「没在晃」，之后看到的另一个
+// 电平就是「在晃」。两种模块都不用改代码。
+// 想写死就把下面改成 0（低电平有效）或 1（高电平有效）。
+#define VIB_POLARITY (-1)          // -1 = 开机自测
+int gVibRestLevel = LOW;           // 「没在晃」时的电平，setup 里定
 
 bool          gVibRaw      = false;   // 原始电平
 bool          gVibLevel    = false;   // 去抖后的电平
@@ -666,17 +669,28 @@ void setup() {
   }
   Serial.printf("[touch] init A=%d B=%d\n", (int)digitalRead(PIN_TOUT), (int)digitalRead(PIN_TINB));
 
-  // ②.5 震动传感器。上拉/下拉按有效极性走：模块没接好时稳定在"没震"，
-  //     不会因为悬空而把整块表情冲到 DIZZY。
-  #if VIB_ACTIVE_HIGH
-    pinMode(PIN_VIB, INPUT_PULLDOWN);
-  #else
-    pinMode(PIN_VIB, INPUT_PULLUP);
-  #endif
-  gVibRaw = gVibLevel = vibPressed();
+  // ②.5 震动传感器。极性开机自测：静置采样 600ms，多数派电平就是
+  //     「没在晃」。上拉/下拉跟着静止电平走，模块没接好时读数稳定在
+  //     静止值，不会因为悬空把整块表情冲到 DIZZY。
+  pinMode(PIN_VIB, INPUT_PULLDOWN);
+  gVibRestLevel = LOW;
+  if (VIB_POLARITY < 0) {
+    int hi = 0, lo = 0;
+    unsigned long t0 = millis();
+    while (millis() - t0 < 600) {
+      if (digitalRead(PIN_VIB) == HIGH) hi++; else lo++;
+      delay(1);
+    }
+    gVibRestLevel = (hi >= lo) ? HIGH : LOW;
+  } else {
+    gVibRestLevel = VIB_POLARITY ? LOW : HIGH;
+  }
+  pinMode(PIN_VIB, gVibRestLevel == HIGH ? INPUT_PULLDOWN : INPUT_PULLUP);
+  gVibRaw = gVibLevel = false;
   gVibChangeAt = millis();
-  Serial.printf("[vib] init shake=%d (pin=%d active_high=%d)\n",
-                (int)gVibLevel, (int)digitalRead(PIN_VIB), (int)VIB_ACTIVE_HIGH);
+  Serial.printf("[vib] init rest=%d pin=%d polarity=%s\n",
+                (int)gVibRestLevel, (int)digitalRead(PIN_VIB),
+                VIB_POLARITY < 0 ? "auto" : (VIB_POLARITY ? "high" : "low"));
 
   // ③ 屏（速率必须在 begin() 之前设：begin 时才把 bus_clock 交给 HAL）
   u8g2.setBusClock(400000);
@@ -767,11 +781,10 @@ bool isSleepyState() { return gDrowsy || gAsleep; }
 // ---------------- 震动：读数 + 表情 ----------------
 // 40ms 去抖，只认上升沿。一串脉冲会不断刷新 gVibPulseAt，
 // 于是「还在晃」这件事对上层就是一个持续的布尔量。
-// vibPressed() 把物理电平按 VIB_ACTIVE_HIGH 翻译成"在晃 / 不在晃"，
+// vibPressed() 把物理电平按 gVibRestLevel 翻译成"在晃 / 不在晃"，
 // 上层一律只用这个语义，不再关心极性。
 bool vibPressed() {
-  bool raw = (digitalRead(PIN_VIB) == HIGH);
-  return VIB_ACTIVE_HIGH ? raw : !raw;
+  return (digitalRead(PIN_VIB) == HIGH) != (gVibRestLevel == HIGH);
 }
 
 void pollVib(unsigned long now) {
