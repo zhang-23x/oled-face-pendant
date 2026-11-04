@@ -53,7 +53,7 @@ enum Emotion {
 #define PIN_TVCC  7      // 给 TTP223 供电（IO 输出高，2mA 级）
 #define PIN_TOUT  6      // 读 TTP223 输出（A 键）
 #define PIN_TINB  10     // B 键：第二路 TTP223 输出（高电平有效）
-#define PIN_VIB   5      // 震动传感器输出（高电平有效）—— 换脚只改这里
+#define PIN_VIB   0      // 震动传感器输出（高电平有效）—— 换脚只改这里
 
 // ---------------- 双键触摸状态 ----------------
 // 一颗按键的完整状态：去抖 + 长按 + 双击 + 按下瞬间的睡眠快照

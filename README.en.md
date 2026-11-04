@@ -76,7 +76,7 @@ bcee8860ce9250433795d84c95fa088e6b265c8fa9fcd1c0b3f3fec2fe9c9c81  .ino
 | Skip | Result |
 |---|---|
 | Touch modules | **Still runs.** Boots to NEUTRAL, controlled from the web page. No gestures |
-| Shake sensor | **Still runs.** GPIO5 has an internal pulldown, so an unwired pin reads "never shaking" and no face misfires. You just lose the dizzy reaction |
+| Shake sensor | **Still runs.** GPIO0 has an internal pulldown, so an unwired pin reads "never shaking" and no face misfires. You just lose the dizzy reaction |
 | OLED | Doesn't run |
 | Acrylic case | **Still runs.** Bare board on a desk |
 
@@ -244,7 +244,7 @@ The `P` command is how all the images in `docs/faces/` were produced. See [`tool
 | Touch module power | GPIO7 | powers the TTP223 from an IO pin (high, ~2 mA) — saves a wire |
 | Key A out | GPIO6 | TTP223 push-pull output |
 | Key B out | GPIO10 | TTP223 push-pull output, internal pulldown |
-| Shake sensor out | GPIO5 | active-high, internal pulldown; an unwired pin reads "never shaking" |
+| Shake sensor out | GPIO0 | active-high, internal pulldown; an unwired pin reads "never shaking" |
 | A/B GND | GND | common ground required |
 
 Key A's polarity is auto-detected at boot (12 samples). Key B is **always active-high**, because the internal pulldown guarantees it can only ever pull high when touched.
