@@ -100,9 +100,9 @@ That means **new expressions cost 4 lines of parameters, not 1 KB of bitmap.**
 | | | | | | |
 |---|---|---|---|---|---|
 | 0 NEUTRAL | 1 HAPPY | 2 SAD | 3 SURPRISED | 4 SLEEPY | 5 ANGRY |
-| 6 SLEEPING | 7 YAWN | 8 LAUGH | 9 BLINK | 10 BATTLE | 11 CRY |
-| 12 SHY | 13 THINK | 14 YUMMY | 15 MOCK | 16 MUSIC | 17 CONFIDENT |
-| 18 PANIC | 19 DIZZY | 20 LOVE | 21 SNEEZE | | |
+| 6 SLEEPING | 7 YAWN | 8 LAUGH | 9 CRY | 10 SHY | 11 THINK |
+| 12 YUMMY | 13 MOCK | 14 MUSIC | 15 CONFIDENT | 16 PANIC | 17 DIZZY |
+| 18 LOVE | 19 SNEEZE | 20 HELLO | 21 INVESTIGATE | | |
 
 Individual 128×64 captures are in [`docs/faces/`](docs/faces/) — these are raw frame-buffer dumps from the real device, not renders.
 
@@ -309,7 +309,7 @@ arduino-cli upload \
   firmware/oled_face_pendant
 ```
 
-Resource use: **1,030,509 bytes of 1,310,720 (78 %)** program space, ~12 % RAM.
+Resource use: **1,033,025 bytes of 1,310,720 (78 %)** program space, ~12 % RAM.
 
 Library dependencies: `U8g2` by oliver (only external library).
 
